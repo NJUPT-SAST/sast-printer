@@ -8,7 +8,7 @@ import httpx
 import json
 import os
 
-app = FastAPI(title="sast-printer-mock")
+app = FastAPI(title="sast-printer-mock", docs_url=None, redoc_url=None)
 
 # Lark API configuration
 LARK_TOKEN_FILE = os.getenv("LARK_TOKEN_FILE", "token.json")
