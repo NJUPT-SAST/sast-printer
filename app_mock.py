@@ -96,8 +96,15 @@ def list_printers():
 async def print_pdf(
     file_id: str = Form(...),
     printer_id: str = Form(...),
-    manual_duplex: bool = Form(False)
+    manual_duplex: bool = Form(False),
+    copies: int = Form(1)
 ):
+    # Validate copies
+    if copies < 1:
+        copies = 1
+    elif copies > 100:
+        copies = 100
+    
     # Try to download file from Lark to test if download works
     try:
         file_content = await download_file_from_lark(file_id)
@@ -112,7 +119,8 @@ async def print_pdf(
                 "printer": printer_id,
                 "job_id": "",
                 "continue_url": "",
-                "expires_at": ""
+                "expires_at": "",
+                "copies": copies
             })
         else:
             return JSONResponse(status_code=500, content={
@@ -120,7 +128,8 @@ async def print_pdf(
                 "printer": printer_id,
                 "job_id": "",
                 "continue_url": "",
-                "expires_at": ""
+                "expires_at": "",
+                "copies": copies
             })
     
     # Mock - always return success if download succeeded
@@ -131,7 +140,8 @@ async def print_pdf(
             "printer": printer_id,
             "job_id": "12345",
             "continue_url": "",
-            "expires_at": ""
+            "expires_at": "",
+            "copies": copies
         })
     else:
         # Manual duplex success
@@ -143,7 +153,8 @@ async def print_pdf(
             "printer": printer_id,
             "job_id": "67890",
             "continue_url": f"{continuation_job_id}",
-            "expires_at": expires_at.isoformat()
+            "expires_at": expires_at.isoformat(),
+            "copies": copies
         })
 
 

@@ -225,10 +225,17 @@ def list_printers():
 async def print_pdf(
     file_id: str = Form(...),
     printer_id: str = Form(...),
-    manual_duplex: bool = Form(False)
+    manual_duplex: bool = Form(False),
+    copies: int = Form(1)
 ):
     # Cleanup expired jobs first
     cleanup_expired_jobs()
+    
+    # Validate copies
+    if copies < 1:
+        copies = 1
+    elif copies > 100:
+        copies = 100  # Limit to prevent abuse
     
     # Fetch file from API
     try:
@@ -239,7 +246,8 @@ async def print_pdf(
             "printer": printer_id,
             "job_id": "",
             "continue_url": "",
-            "expires_at": ""
+            "expires_at": "",
+            "copies": copies
         })
     
     # Basic validation
@@ -253,7 +261,8 @@ async def print_pdf(
             "printer": printer_id,
             "job_id": "",
             "continue_url": "",
-            "expires_at": ""
+            "expires_at": "",
+            "copies": copies
         })
 
     tmp_file = None
@@ -273,14 +282,15 @@ async def print_pdf(
                 if printer_id == "sast-printer":
                     # No reversal for sast-printer
                     try:
-                        job_id = conn.printFile(printer_id, tmp_file, filename, {})
+                        job_id = conn.printFile(printer_id, tmp_file, filename, {"copies": str(copies)})
                     except RuntimeError as e:
                         return JSONResponse(status_code=500, content={
                             "status": f"打印任务提交失败：{e}",
                             "printer": printer_id,
                             "job_id": "",
                             "continue_url": "",
-                            "expires_at": ""
+                            "expires_at": "",
+                            "copies": copies
                         })
                 else:
                     # Reverse the pages for other printers
@@ -297,14 +307,15 @@ async def print_pdf(
                         reversed_writer.write(f)
                     
                     try:
-                        job_id = conn.printFile(printer_id, reversed_tmp.name, filename, {})
+                        job_id = conn.printFile(printer_id, reversed_tmp.name, filename, {"copies": str(copies)})
                     except RuntimeError as e:
                         return JSONResponse(status_code=500, content={
                             "status": f"打印任务提交失败：{e}",
                             "printer": printer_id,
                             "job_id": "",
                             "continue_url": "",
-                            "expires_at": ""
+                            "expires_at": "",
+                            "copies": copies
                         })
                     finally:
                         # Clean up reversed temp file
@@ -321,7 +332,8 @@ async def print_pdf(
                     "printer": printer_id,
                     "job_id": "",
                     "continue_url": "",
-                    "expires_at": ""
+                    "expires_at": "",
+                    "copies": copies
                 })
 
             return JSONResponse(status_code=202, content={
@@ -329,7 +341,8 @@ async def print_pdf(
                 "printer": printer_id,
                 "job_id": str(job_id),
                 "continue_url": "",
-                "expires_at": ""
+                "expires_at": "",
+                "copies": copies
             })
         else:
             # Manual duplex - split and print even pages first
@@ -341,19 +354,21 @@ async def print_pdf(
                     "printer": printer_id,
                     "job_id": "",
                     "continue_url": "",
-                    "expires_at": ""
+                    "expires_at": "",
+                    "copies": copies
                 })
             
             # Print even pages first
             try:
-                even_job_id = conn.printFile(printer_id, even_pages_file, f"{filename}_even", {})
+                even_job_id = conn.printFile(printer_id, even_pages_file, f"{filename}_even", {"copies": str(copies)})
             except RuntimeError as e:
                 return JSONResponse(status_code=500, content={
                     "status": f"偶数页打印任务提交失败：{e}",
                     "printer": printer_id,
                     "job_id": "",
                     "continue_url": "",
-                    "expires_at": ""
+                    "expires_at": "",
+                    "copies": copies
                 })
             
             # Generate unique job ID for the continuation
@@ -366,7 +381,8 @@ async def print_pdf(
                     "odd_pages_path": odd_pages_file,
                     "printer_id": printer_id,
                     "filename": filename,
-                    "expires_at": expires_at
+                    "expires_at": expires_at,
+                    "copies": copies
                 }
             
             # Don't delete odd_pages_file yet - it's needed for continuation
@@ -377,7 +393,8 @@ async def print_pdf(
                 "printer": printer_id,
                 "job_id": str(even_job_id),
                 "continue_url": f"{continuation_job_id}",
-                "expires_at": expires_at.isoformat()
+                "expires_at": expires_at.isoformat(),
+                "copies": copies
             })
             
     finally:
@@ -441,7 +458,7 @@ def continue_manual_duplex(job_id: str):
                 job_data["printer_id"], 
                 odd_pages_path, 
                 f"{job_data['filename']}_odd", 
-                {}
+                {"copies": str(job_data.get("copies", 1))}
             )
         except RuntimeError as e:
             return JSONResponse(status_code=500, content={
