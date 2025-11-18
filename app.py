@@ -253,8 +253,8 @@ async def print_pdf(
     # Validate copies
     if copies < 1:
         copies = 1
-    elif copies > 100:
-        copies = 100  # Limit to prevent abuse
+    elif copies > 10:
+        copies = 10  # Limit to prevent abuse
     
     # Fetch file from API
     try:
