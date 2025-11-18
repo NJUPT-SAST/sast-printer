@@ -201,6 +201,25 @@ def split_pdf_for_manual_duplex(pdf_path: str, printer_id: str) -> tuple[str, st
     return even_tmp.name, odd_tmp.name
 
 
+def make_collated_pdf(input_pdf_path: str, copies: int) -> str:
+    """
+    Generate a new PDF that repeats the entire document 'copies' times in order
+    to guarantee collated output (1..N, 1..N, ...), regardless of printer support.
+    Returns path to the generated temporary PDF.
+    """
+    reader = PdfReader(input_pdf_path)
+    writer = PdfWriter()
+    if copies < 1:
+        copies = 1
+    for _ in range(copies):
+        for i in range(len(reader.pages)):
+            writer.add_page(reader.pages[i])
+    out_tmp = tempfile.NamedTemporaryFile(delete=False, suffix="_collated.pdf")
+    with open(out_tmp.name, "wb") as f:
+        writer.write(f)
+    return out_tmp.name
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -282,7 +301,28 @@ async def print_pdf(
                 if printer_id == "sast-printer":
                     # No reversal for sast-printer
                     try:
-                        job_id = conn.printFile(printer_id, tmp_file, filename, {"copies": str(copies)})
+                        to_print_path = tmp_file
+                        collated_tmp = None
+                        if copies > 1:
+                            collated_tmp = make_collated_pdf(to_print_path, copies)
+                            to_print_path = collated_tmp
+                            options = {"copies": "1"}
+                        else:
+                            options = {
+                                "copies": "1",
+                            }
+                        job_id = conn.printFile(
+                            printer_id,
+                            to_print_path,
+                            filename,
+                            options,
+                        )
+                        # Cleanup collated temp if created
+                        if collated_tmp and os.path.exists(collated_tmp):
+                            try:
+                                os.remove(collated_tmp)
+                            except Exception:
+                                pass
                     except RuntimeError as e:
                         return JSONResponse(status_code=500, content={
                             "status": f"打印任务提交失败：{e}",
@@ -307,7 +347,27 @@ async def print_pdf(
                         reversed_writer.write(f)
                     
                     try:
-                        job_id = conn.printFile(printer_id, reversed_tmp.name, filename, {"copies": str(copies)})
+                        to_print_path = reversed_tmp.name
+                        collated_tmp = None
+                        if copies > 1:
+                            collated_tmp = make_collated_pdf(to_print_path, copies)
+                            to_print_path = collated_tmp
+                            options = {"copies": "1"}
+                        else:
+                            options = {
+                                "copies": "1",
+                            }
+                        job_id = conn.printFile(
+                            printer_id,
+                            to_print_path,
+                            filename,
+                            options,
+                        )
+                        if collated_tmp and os.path.exists(collated_tmp):
+                            try:
+                                os.remove(collated_tmp)
+                            except Exception:
+                                pass
                     except RuntimeError as e:
                         return JSONResponse(status_code=500, content={
                             "status": f"打印任务提交失败：{e}",
@@ -360,7 +420,26 @@ async def print_pdf(
             
             # Print even pages first
             try:
-                even_job_id = conn.printFile(printer_id, even_pages_file, f"{filename}_even", {"copies": str(copies)})
+                even_to_print = even_pages_file
+                collated_even_tmp = None
+                collated_odd_tmp = None
+                if copies > 1:
+                    collated_even_tmp = make_collated_pdf(even_pages_file, copies)
+                    even_to_print = collated_even_tmp
+                # Prepare odd collated for continuation if needed
+                if copies > 1:
+                    collated_odd_tmp = make_collated_pdf(odd_pages_file, copies)
+                    # replace odd_pages_file with collated one for continuation
+                    odd_pages_file_to_store = collated_odd_tmp
+                else:
+                    odd_pages_file_to_store = odd_pages_file
+
+                even_job_id = conn.printFile(
+                    printer_id,
+                    even_to_print,
+                    f"{filename}_even",
+                    {"copies": "1"},
+                )
             except RuntimeError as e:
                 return JSONResponse(status_code=500, content={
                     "status": f"偶数页打印任务提交失败：{e}",
@@ -378,15 +457,25 @@ async def print_pdf(
             # Store odd pages info for continuation
             with duplex_jobs_lock:
                 duplex_jobs[continuation_job_id] = {
-                    "odd_pages_path": odd_pages_file,
+                    "odd_pages_path": odd_pages_file_to_store,
                     "printer_id": printer_id,
                     "filename": filename,
                     "expires_at": expires_at,
                     "copies": copies
                 }
             
-            # Don't delete odd_pages_file yet - it's needed for continuation
-            odd_pages_file = None  # Prevent cleanup
+            # 不删除用于续打的奇数页文件；
+            # 如果存储的是原始 odd_pages_file，则避免在 finally 中清理；
+            # 如果存储的是拼接版，则允许 finally 清理原始 odd_pages_file。
+            if 'odd_pages_file_to_store' in locals() and odd_pages_file_to_store == odd_pages_file:
+                odd_pages_file = None
+            # Cleanup temporary collated even/odd files that are not stored
+            if 'collated_even_tmp' in locals() and collated_even_tmp and os.path.exists(collated_even_tmp):
+                try:
+                    os.remove(collated_even_tmp)
+                except Exception:
+                    pass
+            # Do not remove collated_odd_tmp if it is stored for continuation
             
             return JSONResponse(status_code=202, content={
                 "status": "偶数页已发送到打印机，请翻转纸张后继续",
@@ -454,11 +543,12 @@ def continue_manual_duplex(job_id: str):
             })
         
         try:
+            # 当奇数页文件已按 copies 拼接时，这里始终用 1 份提交
             odd_job_id = conn.printFile(
-                job_data["printer_id"], 
-                odd_pages_path, 
-                f"{job_data['filename']}_odd", 
-                {"copies": str(job_data.get("copies", 1))}
+                job_data["printer_id"],
+                odd_pages_path,
+                f"{job_data['filename']}_odd",
+                {"copies": "1"},
             )
         except RuntimeError as e:
             return JSONResponse(status_code=500, content={
