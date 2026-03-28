@@ -1,13 +1,43 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# Dependency directories
+vendor/
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Build directory
+bin/
 dist/
-wheels/
-*.egg-info
 
-# Virtual environments
-.venv
+# Environment files
+.env
+.env.local
+.env.*.local
 
-# Token files
-token.json
+# Local print test files
+printing_test*
+printer_test*
