@@ -5,9 +5,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"goprint/config"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -136,13 +138,13 @@ func prepareManualDuplexFiles(sourcePath string, printerCfg config.PrinterConfig
 		return "", "", nil, fmt.Errorf("invalid page selectors generated for manual duplex")
 	}
 
-	if err := pdfapi.TrimFile(workingSource, firstPassPath, firstSelectors, nil); err != nil {
+	if err := buildOrderedPDF(workingSource, firstPassPath, firstSelectors); err != nil {
 		_ = os.Remove(secondPassPath)
 		cleanup()
 		return "", "", nil, fmt.Errorf("failed to build first pass pdf: %w", err)
 	}
 
-	if err := pdfapi.TrimFile(workingSource, secondPassPath, secondSelectors, nil); err != nil {
+	if err := buildOrderedPDF(workingSource, secondPassPath, secondSelectors); err != nil {
 		_ = os.Remove(secondPassPath)
 		cleanup()
 		return "", "", nil, fmt.Errorf("failed to build second pass pdf: %w", err)
@@ -228,4 +230,239 @@ func getManualDuplexHookTTL() time.Duration {
 
 func countPDFPages(sourcePath string) (int, error) {
 	return pdfapi.PageCountFile(sourcePath)
+}
+
+func prepareReversedPDF(sourcePath string) (string, error) {
+	totalPages, err := pdfapi.PageCountFile(sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read pdf page count: %w", err)
+	}
+	if totalPages <= 1 {
+		return sourcePath, nil
+	}
+
+	selectors := make([]string, 0, totalPages)
+	for i := totalPages; i >= 1; i-- {
+		selectors = append(selectors, strconv.Itoa(i))
+	}
+
+	tmpFile, err := os.CreateTemp("", "goprint-reverse-*.pdf")
+	if err != nil {
+		return "", err
+	}
+	outPath := tmpFile.Name()
+	_ = tmpFile.Close()
+
+	if err := buildOrderedPDF(sourcePath, outPath, selectors); err != nil {
+		_ = os.Remove(outPath)
+		return "", fmt.Errorf("failed to build reversed pdf: %w", err)
+	}
+
+	return outPath, nil
+}
+
+func ApplySingleSideReverse(sourcePath string) (string, error) {
+	return prepareReversedPDF(sourcePath)
+}
+
+func buildOrderedPDF(sourcePath, outPath string, selectors []string) error {
+	if len(selectors) == 0 {
+		return fmt.Errorf("empty selectors")
+	}
+
+	workDir, err := os.MkdirTemp("", "goprint-order-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(workDir) }()
+
+	parts := make([]string, 0, len(selectors))
+	for i, selector := range selectors {
+		partPath := filepath.Join(workDir, fmt.Sprintf("part-%04d.pdf", i))
+		if err := pdfapi.TrimFile(sourcePath, partPath, []string{selector}, nil); err != nil {
+			return err
+		}
+		parts = append(parts, partPath)
+	}
+
+	if err := pdfapi.MergeCreateFile(parts, outPath, false, nil); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ApplyCollateCopies(sourcePath string, copies int) (string, error) {
+	if copies <= 1 {
+		return sourcePath, nil
+	}
+
+	totalPages, err := pdfapi.PageCountFile(sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read pdf page count: %w", err)
+	}
+	if totalPages <= 0 {
+		return "", fmt.Errorf("invalid pdf page count: %d", totalPages)
+	}
+
+	selectors := make([]string, 0, totalPages*copies)
+	for c := 0; c < copies; c++ {
+		for p := 1; p <= totalPages; p++ {
+			selectors = append(selectors, strconv.Itoa(p))
+		}
+	}
+
+	tmpFile, err := os.CreateTemp("", "goprint-collate-*.pdf")
+	if err != nil {
+		return "", err
+	}
+	outPath := tmpFile.Name()
+	_ = tmpFile.Close()
+
+	if err := buildOrderedPDF(sourcePath, outPath, selectors); err != nil {
+		_ = os.Remove(outPath)
+		return "", fmt.Errorf("failed to build collated pdf: %w", err)
+	}
+
+	return outPath, nil
+}
+
+func applyCopiesForPDF(sourcePath string, copies int, collate bool) (string, error) {
+	if copies <= 1 {
+		return sourcePath, nil
+	}
+
+	if collate {
+		return ApplyCollateCopies(sourcePath, copies)
+	}
+
+	return ApplyUncollatedCopies(sourcePath, copies)
+}
+
+func ApplyUncollatedCopies(sourcePath string, copies int) (string, error) {
+	if copies <= 1 {
+		return sourcePath, nil
+	}
+
+	totalPages, err := pdfapi.PageCountFile(sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read pdf page count: %w", err)
+	}
+	if totalPages <= 0 {
+		return "", fmt.Errorf("invalid pdf page count: %d", totalPages)
+	}
+
+	selectors := make([]string, 0, totalPages*copies)
+	for p := 1; p <= totalPages; p++ {
+		for c := 0; c < copies; c++ {
+			selectors = append(selectors, strconv.Itoa(p))
+		}
+	}
+
+	tmpFile, err := os.CreateTemp("", "goprint-uncollate-*.pdf")
+	if err != nil {
+		return "", err
+	}
+	outPath := tmpFile.Name()
+	_ = tmpFile.Close()
+
+	if err := buildOrderedPDF(sourcePath, outPath, selectors); err != nil {
+		_ = os.Remove(outPath)
+		return "", fmt.Errorf("failed to build uncollated pdf: %w", err)
+	}
+
+	return outPath, nil
+}
+
+func BuildManualDuplexPreview(sourcePath string, printerCfg config.PrinterConfig, copies int, collate bool) (string, string, func(), error) {
+	firstPassPath, secondPassPath, baseCleanup, err := prepareManualDuplexFiles(sourcePath, printerCfg)
+	if err != nil {
+		return "", "", nil, err
+	}
+
+	firstPreviewPath, err := applyCopiesForPDF(firstPassPath, copies, collate)
+	if err != nil {
+		baseCleanup()
+		_ = os.Remove(secondPassPath)
+		return "", "", nil, err
+	}
+
+	secondPreviewPath, err := applyCopiesForPDF(secondPassPath, copies, collate)
+	if err != nil {
+		if firstPreviewPath != firstPassPath {
+			_ = os.Remove(firstPreviewPath)
+		}
+		baseCleanup()
+		_ = os.Remove(secondPassPath)
+		return "", "", nil, err
+	}
+
+	cleanup := func() {
+		if firstPreviewPath != firstPassPath {
+			_ = os.Remove(firstPreviewPath)
+		}
+		if secondPreviewPath != secondPassPath {
+			_ = os.Remove(secondPreviewPath)
+		}
+		_ = os.Remove(secondPassPath)
+		baseCleanup()
+	}
+
+	return firstPreviewPath, secondPreviewPath, cleanup, nil
+}
+
+func SavePDFForTest(sourcePath, label string) (string, error) {
+	if strings.TrimSpace(sourcePath) == "" {
+		return "", fmt.Errorf("source path is empty")
+	}
+
+	if err := os.MkdirAll("test", 0o755); err != nil {
+		return "", err
+	}
+
+	safeLabel := sanitizeLabel(label)
+	if safeLabel == "" {
+		safeLabel = "pdf"
+	}
+
+	fileName := fmt.Sprintf("%s-%s.pdf", time.Now().Format("20060102-150405"), safeLabel)
+	outPath := filepath.Join("test", fileName)
+
+	src, err := os.Open(sourcePath)
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+
+	dst, err := os.Create(outPath)
+	if err != nil {
+		return "", err
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return "", err
+	}
+
+	return outPath, nil
+}
+
+func sanitizeLabel(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			continue
+		}
+		if r == '-' || r == '_' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteRune('_')
+	}
+	return strings.Trim(b.String(), "_")
 }

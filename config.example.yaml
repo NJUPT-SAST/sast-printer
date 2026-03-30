@@ -18,6 +18,7 @@ printers:
   - id: default-printer
     uri: ipp://localhost:631/printers/default-printer
     visible: true
+    reverse: false
     duplex_mode: off
     first_pass: even
     pad_to_even: true
@@ -30,6 +31,7 @@ printers:
   - id: native-duplex-printer
     uri: ipp://localhost:631/printers/native-duplex-printer
     visible: true
+    reverse: false
     duplex_mode: auto
     first_pass: even
     pad_to_even: true
@@ -42,6 +44,7 @@ printers:
   - id: internal-backup-printer
     uri: ipp://127.0.0.1:631/printers/internal-backup-printer
     visible: false
+    reverse: true
     duplex_mode: manual
     first_pass: odd
     pad_to_even: true

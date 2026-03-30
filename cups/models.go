@@ -31,4 +31,5 @@ type PrintOptions struct {
 	Orientation string `json:"orientation"` // Portrait, Landscape
 	MediaSize   string `json:"media_size"`  // A4, Letter, etc.
 	Quality     string `json:"quality"`     // Draft, Normal, High
+	Collate     bool   `json:"collate"`     // whether to collate copies (1,2,3,1,2,3 vs 1,1,2,2,3,3)
 }

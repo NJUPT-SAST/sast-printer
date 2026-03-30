@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"goprint/cups"
 
@@ -18,6 +19,18 @@ func HealthCheck(c *gin.Context) {
 		"status":  "healthy",
 		"message": "GoPrint is running.",
 	})
+}
+
+func applyCopiesMode(sourcePath string, copies int, collate bool) (string, error) {
+	if copies <= 1 {
+		return sourcePath, nil
+	}
+
+	if collate {
+		return ApplyCollateCopies(sourcePath, copies)
+	}
+
+	return ApplyUncollatedCopies(sourcePath, copies)
 }
 
 // ListPrinters 列出所有可用打印机
@@ -56,6 +69,7 @@ func ListPrinters(c *gin.Context) {
 			"model":               printer.Model,
 			"location":            printer.Location,
 			"duplex_mode":         printerCfg.NormalizedDuplexMode(),
+			"reverse":             printerCfg.Reverse,
 			"first_pass":          printerCfg.NormalizedFirstPass(),
 			"pad_to_even":         printerCfg.PadToEvenEnabled(),
 			"reverse_first_pass":  printerCfg.ReverseFirstPass,
@@ -105,6 +119,7 @@ func GetPrinterInfo(c *gin.Context) {
 		"model":               printer.Model,
 		"location":            printer.Location,
 		"duplex_mode":         printerCfg.NormalizedDuplexMode(),
+		"reverse":             printerCfg.Reverse,
 		"first_pass":          printerCfg.NormalizedFirstPass(),
 		"pad_to_even":         printerCfg.PadToEvenEnabled(),
 		"reverse_first_pass":  printerCfg.ReverseFirstPass,
@@ -125,7 +140,7 @@ func SubmitPrintJob(c *gin.Context) {
 	}
 
 	copies := 1
-	if rawCopies := c.PostForm("copies"); rawCopies != "" {
+	if rawCopies := c.Query("copies"); rawCopies != "" {
 		parsedCopies, err := strconv.Atoi(rawCopies)
 		if err != nil || parsedCopies <= 0 {
 			c.JSON(http.StatusBadRequest, gin.H{
@@ -134,6 +149,36 @@ func SubmitPrintJob(c *gin.Context) {
 			return
 		}
 		copies = parsedCopies
+	}
+
+	duplexRequested := false
+	if rawDuplex := strings.TrimSpace(strings.ToLower(c.Query("duplex"))); rawDuplex != "" {
+		switch rawDuplex {
+		case "1", "true", "yes", "on":
+			duplexRequested = true
+		case "0", "false", "no", "off":
+			duplexRequested = false
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "duplex must be one of: true/false/1/0/yes/no/on/off",
+			})
+			return
+		}
+	}
+
+	collate := true
+	if rawCollate := strings.TrimSpace(strings.ToLower(c.Query("collate"))); rawCollate != "" {
+		switch rawCollate {
+		case "1", "true", "yes", "on":
+			collate = true
+		case "0", "false", "no", "off":
+			collate = false
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "collate must be one of: true/false/1/0/yes/no/on/off",
+			})
+			return
+		}
 	}
 
 	file, err := c.FormFile("file")
@@ -168,8 +213,30 @@ func SubmitPrintJob(c *gin.Context) {
 	}
 
 	duplexMode := printerCfg.NormalizedDuplexMode()
+	if !duplexRequested {
+		duplexMode = "off"
+	}
 	if pageCount, countErr := countPDFPages(tempPath); countErr == nil && pageCount == 1 {
 		duplexMode = "off"
+	}
+
+	if duplexRequested && printerCfg.NormalizedDuplexMode() == "off" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":      "duplex requested but printer duplex_mode is off",
+			"printer_id": printerID,
+			"printer_config": gin.H{
+				"duplex_mode":         printerCfg.NormalizedDuplexMode(),
+				"reverse":             printerCfg.Reverse,
+				"first_pass":          printerCfg.NormalizedFirstPass(),
+				"pad_to_even":         printerCfg.PadToEvenEnabled(),
+				"reverse_first_pass":  printerCfg.ReverseFirstPass,
+				"reverse_second_pass": printerCfg.ReverseSecondPass,
+				"rotate_second_pass":  printerCfg.RotateSecondPass,
+				"note":                printerCfg.Note,
+			},
+			"hint": "set duplex_mode to auto or manual in config.yaml if this printer supports duplex",
+		})
+		return
 	}
 
 	if duplexMode == "manual" {
@@ -183,7 +250,37 @@ func SubmitPrintJob(c *gin.Context) {
 		}
 		defer cleanup()
 
-		initialJobID, err := cupsClient.SubmitJob(printerName, firstPassPath, cups.PrintOptions{Copies: copies})
+		firstPassToSubmit, err := applyCopiesMode(firstPassPath, copies, collate)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "failed to build first pass copies",
+				"details": err.Error(),
+			})
+			return
+		}
+		if firstPassToSubmit != firstPassPath {
+			defer os.Remove(firstPassToSubmit)
+		}
+
+		secondPassToStore, err := applyCopiesMode(secondPassPath, copies, collate)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "failed to build second pass copies",
+				"details": err.Error(),
+			})
+			return
+		}
+
+		testFirstPassPath := ""
+		if savedPath, saveErr := SavePDFForTest(firstPassToSubmit, fmt.Sprintf("%s-first-pass", printerID)); saveErr == nil {
+			testFirstPassPath = savedPath
+		}
+		testSecondPassPath := ""
+		if savedPath, saveErr := SavePDFForTest(secondPassToStore, fmt.Sprintf("%s-second-pass", printerID)); saveErr == nil {
+			testSecondPassPath = savedPath
+		}
+
+		initialJobID, err := cupsClient.SubmitJob(printerName, firstPassToSubmit, cups.PrintOptions{Copies: 1})
 		if err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"error":      "failed to submit first pass for manual duplex",
@@ -193,9 +290,9 @@ func SubmitPrintJob(c *gin.Context) {
 			return
 		}
 
-		token, err := saveManualDuplexPending(printerID, secondPassPath, copies)
+		token, err := saveManualDuplexPending(printerID, secondPassToStore, 1)
 		if err != nil {
-			_ = os.Remove(secondPassPath)
+			_ = os.Remove(secondPassToStore)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error":   "failed to create manual duplex hook",
 				"details": err.Error(),
@@ -206,10 +303,14 @@ func SubmitPrintJob(c *gin.Context) {
 		c.JSON(http.StatusCreated, gin.H{
 			"job_id":          initialJobID,
 			"printer":         printerID,
+			"copies":          copies,
+			"collate":         collate,
 			"status":          "pending",
 			"manual_duplex":   true,
 			"duplex_mode":     "manual",
 			"note":            printerCfg.Note,
+			"test_first_pdf":  testFirstPassPath,
+			"test_second_pdf": testSecondPassPath,
 			"message":         "First pass submitted. Use hook_url to print remaining pages.",
 			"hook_url":        fmt.Sprintf("/api/manual-duplex-hooks/%s/continue", token),
 			"hook_expires_in": getManualDuplexHookTTL().String(),
@@ -217,12 +318,45 @@ func SubmitPrintJob(c *gin.Context) {
 		return
 	}
 
-	printOpts := cups.PrintOptions{Copies: copies}
+	printPath := tempPath
+	if duplexMode == "off" && printerCfg.Reverse {
+		reversedPath, reverseErr := prepareReversedPDF(tempPath)
+		if reverseErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "failed to reverse document for single-side printing",
+				"details": reverseErr.Error(),
+			})
+			return
+		}
+		if reversedPath != tempPath {
+			defer os.Remove(reversedPath)
+			printPath = reversedPath
+		}
+	}
+
+	finalPrintPath, err := applyCopiesMode(printPath, copies, collate)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "failed to build copies",
+			"details": err.Error(),
+		})
+		return
+	}
+	if finalPrintPath != printPath {
+		defer os.Remove(finalPrintPath)
+	}
+
+	testPDFPath := ""
+	if savedPath, saveErr := SavePDFForTest(finalPrintPath, fmt.Sprintf("%s-final", printerID)); saveErr == nil {
+		testPDFPath = savedPath
+	}
+
+	printOpts := cups.PrintOptions{Copies: 1, Collate: collate}
 	if duplexMode == "auto" {
 		printOpts.Sides = "two-sided-long-edge"
 	}
 
-	jobID, err := cupsClient.SubmitJob(printerName, tempPath, printOpts)
+	jobID, err := cupsClient.SubmitJob(printerName, finalPrintPath, printOpts)
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error":      "failed to submit print job",
@@ -235,10 +369,13 @@ func SubmitPrintJob(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"job_id":        jobID,
 		"printer":       printerID,
+		"copies":        copies,
+		"collate":       collate,
 		"status":        "pending",
 		"manual_duplex": duplexMode == "manual",
 		"duplex_mode":   duplexMode,
 		"note":          printerCfg.Note,
+		"test_pdf":      testPDFPath,
 		"message":       "Print job submitted successfully",
 	})
 }
@@ -274,6 +411,11 @@ func ContinueManualDuplexPrint(c *gin.Context) {
 		return
 	}
 
+	testPDFPath := ""
+	if savedPath, saveErr := SavePDFForTest(pending.RemainingFilePath, fmt.Sprintf("%s-remaining", pending.PrinterID)); saveErr == nil {
+		testPDFPath = savedPath
+	}
+
 	_ = os.Remove(pending.RemainingFilePath)
 	deleteManualDuplexPending(token)
 
@@ -282,6 +424,7 @@ func ContinueManualDuplexPrint(c *gin.Context) {
 		"printer":       pending.PrinterID,
 		"status":        "pending",
 		"manual_duplex": true,
+		"test_pdf":      testPDFPath,
 		"message":       "Remaining pages submitted successfully",
 	})
 }

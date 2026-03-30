@@ -33,6 +33,7 @@ type PrinterConfig struct {
 	ID                string `yaml:"id"`
 	URI               string `yaml:"uri"`
 	Visible           bool   `yaml:"visible"`
+	Reverse           bool   `yaml:"reverse"`
 	DuplexMode        string `yaml:"duplex_mode"`
 	FirstPass         string `yaml:"first_pass"`
 	PadToEven         *bool  `yaml:"pad_to_even"`

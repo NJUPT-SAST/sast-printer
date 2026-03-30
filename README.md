@@ -79,8 +79,20 @@ curl -sS http://localhost:5001/api/printers
 ```bash
 curl -sS -X POST http://localhost:5001/api/jobs \
     -F printer_id=sast-color-printer \
-    -F file=@printer_test.pdf \
-    -F copies=1
+    -F file=@printer_test.pdf
+```
+
+可选 URL 参数：
+
+- `duplex=true|false`：是否启用双面打印（默认 `false`）
+- `copies=整数`：打印份数（默认 `1`）
+
+示例（双面 + 2 份）：
+
+```bash
+curl -sS -X POST "http://localhost:5001/api/jobs?duplex=true&copies=2" \
+    -F printer_id=sast-color-printer \
+    -F file=@printer_test.pdf
 ```
 
 ### 2.1) 提交手动双面任务
@@ -124,7 +136,9 @@ curl -sS -X DELETE http://localhost:5001/api/jobs/29
 - `duplex_mode: off`：关闭双面功能，按单轮正常打印
 - `duplex_mode: auto`：使用打印机原生双面（IPP `two-sided-long-edge`）
 - `duplex_mode: manual`：执行手动双面（双轮提交 + hook）
+- 当请求 `duplex` 未传或为 `false` 时，默认单面打印 1 份
 - 当原始文件为 1 页时：无论配置为何，均按单轮打印（不启用双面）
+- `reverse` 仅在单面打印时生效；双面打印不遵守此设定
 - `first_pass` 可选 `even` 或 `odd`
 - `reverse_first_pass` / `reverse_second_pass` 控制两轮页序是否反转
 - `rotate_second_pass` 控制二轮文件是否旋转 180 度
@@ -153,6 +167,7 @@ printers:
   - id: sast-printer
     uri: ipp://localhost:631/printers/sast-printer
     visible: true
+        reverse: false
     duplex_mode: off
     first_pass: even
     pad_to_even: true
@@ -168,6 +183,7 @@ printers:
 - `printing.manual_duplex_hook_ttl`：手动双面 hook 有效期（默认 `30m`）
 - `printers[].uri`：按打印机配置完整 URI（支持不同打印机在不同 CUPS 地址）
 - `printers[].visible`：是否在 `GET /api/printers` 中返回该打印机
+- `printers[].reverse`：单面打印时是否反向页序（双面模式忽略此字段）
 - `printers[].duplex_mode`：`off` / `auto` / `manual`（默认 `off`）
 - `printers[].first_pass`：`even` / `odd`（默认 `even`）
 - `printers[].pad_to_even`：奇数页时是否补空白页（默认 `true`）
