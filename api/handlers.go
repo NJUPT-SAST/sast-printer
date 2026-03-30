@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"goprint/cups"
 
@@ -271,15 +272,6 @@ func SubmitPrintJob(c *gin.Context) {
 			return
 		}
 
-		testFirstPassPath := ""
-		if savedPath, saveErr := SavePDFForTest(firstPassToSubmit, fmt.Sprintf("%s-first-pass", printerID)); saveErr == nil {
-			testFirstPassPath = savedPath
-		}
-		testSecondPassPath := ""
-		if savedPath, saveErr := SavePDFForTest(secondPassToStore, fmt.Sprintf("%s-second-pass", printerID)); saveErr == nil {
-			testSecondPassPath = savedPath
-		}
-
 		initialJobID, err := cupsClient.SubmitJob(printerName, firstPassToSubmit, cups.PrintOptions{Copies: 1})
 		if err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
@@ -290,7 +282,7 @@ func SubmitPrintJob(c *gin.Context) {
 			return
 		}
 
-		token, err := saveManualDuplexPending(printerID, secondPassToStore, 1)
+		token, expiresAt, err := saveManualDuplexPending(printerID, secondPassToStore, 1)
 		if err != nil {
 			_ = os.Remove(secondPassToStore)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -306,14 +298,11 @@ func SubmitPrintJob(c *gin.Context) {
 			"copies":          copies,
 			"collate":         collate,
 			"status":          "pending",
-			"manual_duplex":   true,
-			"duplex_mode":     "manual",
+			"duplex":          true,
 			"note":            printerCfg.Note,
-			"test_first_pdf":  testFirstPassPath,
-			"test_second_pdf": testSecondPassPath,
 			"message":         "First pass submitted. Use hook_url to print remaining pages.",
 			"hook_url":        fmt.Sprintf("/api/manual-duplex-hooks/%s/continue", token),
-			"hook_expires_in": getManualDuplexHookTTL().String(),
+			"hook_expires_at": expiresAt.UTC().Format(time.RFC3339),
 		})
 		return
 	}
@@ -346,11 +335,6 @@ func SubmitPrintJob(c *gin.Context) {
 		defer os.Remove(finalPrintPath)
 	}
 
-	testPDFPath := ""
-	if savedPath, saveErr := SavePDFForTest(finalPrintPath, fmt.Sprintf("%s-final", printerID)); saveErr == nil {
-		testPDFPath = savedPath
-	}
-
 	printOpts := cups.PrintOptions{Copies: 1, Collate: collate}
 	if duplexMode == "auto" {
 		printOpts.Sides = "two-sided-long-edge"
@@ -367,16 +351,14 @@ func SubmitPrintJob(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"job_id":        jobID,
-		"printer":       printerID,
-		"copies":        copies,
-		"collate":       collate,
-		"status":        "pending",
-		"manual_duplex": duplexMode == "manual",
-		"duplex_mode":   duplexMode,
-		"note":          printerCfg.Note,
-		"test_pdf":      testPDFPath,
-		"message":       "Print job submitted successfully",
+		"job_id":  jobID,
+		"printer": printerID,
+		"copies":  copies,
+		"collate": collate,
+		"status":  "pending",
+		"duplex":  duplexMode != "off",
+		"note":    printerCfg.Note,
+		"message": "Print job submitted successfully",
 	})
 }
 
@@ -411,21 +393,37 @@ func ContinueManualDuplexPrint(c *gin.Context) {
 		return
 	}
 
-	testPDFPath := ""
-	if savedPath, saveErr := SavePDFForTest(pending.RemainingFilePath, fmt.Sprintf("%s-remaining", pending.PrinterID)); saveErr == nil {
-		testPDFPath = savedPath
+	_ = os.Remove(pending.RemainingFilePath)
+	deleteManualDuplexPending(token)
+
+	c.JSON(http.StatusCreated, gin.H{
+		"job_id":  jobID,
+		"printer": pending.PrinterID,
+		"status":  "pending",
+		"duplex":  true,
+		"message": "Remaining pages submitted successfully",
+	})
+}
+
+func CancelManualDuplexPrint(c *gin.Context) {
+	token := c.Param("token")
+	pending, ok := getManualDuplexPending(token)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "manual duplex hook not found or already used",
+		})
+		return
 	}
 
 	_ = os.Remove(pending.RemainingFilePath)
 	deleteManualDuplexPending(token)
 
-	c.JSON(http.StatusCreated, gin.H{
-		"job_id":        jobID,
-		"printer":       pending.PrinterID,
-		"status":        "pending",
-		"manual_duplex": true,
-		"test_pdf":      testPDFPath,
-		"message":       "Remaining pages submitted successfully",
+	c.JSON(http.StatusOK, gin.H{
+		"printer":   pending.PrinterID,
+		"duplex":    false,
+		"status":    "cancelled",
+		"message":   "Manual duplex flow cancelled; remaining pages were not submitted",
+		"cancelled": true,
 	})
 }
 

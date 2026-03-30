@@ -34,14 +34,15 @@ var manualDuplexStore = struct {
 	items: map[string]manualDuplexPending{},
 }
 
-func saveManualDuplexPending(printerID, remainingFilePath string, copies int) (string, error) {
+func saveManualDuplexPending(printerID, remainingFilePath string, copies int) (string, time.Time, error) {
 	token, err := randomToken(16)
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 
 	now := time.Now()
 	ttl := getManualDuplexHookTTL()
+	expiresAt := now.Add(ttl)
 
 	manualDuplexStore.Lock()
 	defer manualDuplexStore.Unlock()
@@ -50,10 +51,10 @@ func saveManualDuplexPending(printerID, remainingFilePath string, copies int) (s
 		RemainingFilePath: remainingFilePath,
 		Copies:            copies,
 		CreatedAt:         now,
-		ExpiresAt:         now.Add(ttl),
+		ExpiresAt:         expiresAt,
 	}
 
-	return token, nil
+	return token, expiresAt, nil
 }
 
 func getManualDuplexPending(token string) (manualDuplexPending, bool) {

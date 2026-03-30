@@ -1,0 +1,641 @@
+openapi: 3.0.0
+info:
+  title: GoPrint 打印服务 API
+  description: |
+    GoPrint 是一个基于 Go 和 Gin 框架的打印服务 API，提供 CUPS 集成的打印功能。
+    支持自动双面打印、手动双面打印、份数排列等功能。
+  version: 1.0.0
+  contact:
+    name: GoPrint 团队
+servers:
+  - url: http://localhost:5001
+    description: 本地开发环境
+  - url: http://{host}:{port}
+    description: 自定义服务器
+    variables:
+      host:
+        default: localhost
+        description: 服务器地址
+      port:
+        default: '5001'
+        description: 服务器端口
+
+tags:
+  - name: 系统
+    description: 系统级接口
+  - name: 打印机管理
+    description: 打印机查询和信息接口
+  - name: 打印任务
+    description: 打印任务相关操作
+  - name: 手动双面打印
+    description: 手动双面打印工作流
+
+paths:
+  /health:
+    get:
+      tags:
+        - 系统
+      summary: 健康检查
+      description: 检查服务是否运行正常
+      operationId: healthCheck
+      responses:
+        '200':
+          description: 服务正常运行
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "healthy"
+                  message:
+                    type: string
+                    example: "GoPrint is running."
+
+  /api/printers:
+    get:
+      tags:
+        - 打印机管理
+      summary: 列出所有可用打印机
+      description: 获取系统中所有配置的打印机列表及其详细信息
+      operationId: listPrinters
+      responses:
+        '200':
+          description: 成功获取打印机列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  printers:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Printer'
+                  count:
+                    type: integer
+                    example: 2
+        '500':
+          description: 服务器错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: CUPS 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/printers/{id}:
+    get:
+      tags:
+        - 打印机管理
+      summary: 获取打印机详细信息
+      description: 获取指定打印机的详细配置和状态信息
+      operationId: getPrinterInfo
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: 打印机ID
+          schema:
+            type: string
+            example: "color-printer"
+      responses:
+        '200':
+          description: 成功获取打印机信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Printer'
+        '404':
+          description: 打印机不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 服务器错误或 CUPS 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/jobs:
+    post:
+      tags:
+        - 打印任务
+      summary: 提交打印任务
+      description: |
+        上传 PDF 文件并提交打印任务。
+        
+        支持的功能：
+        - 自动双面打印（duplex_mode=auto）
+        - 手动双面打印（duplex_mode=manual）
+        - 单面打印（duplex_mode=off）
+        - 份数控制（copies 参数）
+        - 排列方式（collate 参数）
+        - 反向打印（reverse 参数）
+      operationId: submitPrintJob
+      parameters:
+        - name: copies
+          in: query
+          required: false
+          description: 打印份数，默认为 1（1-255）
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+            maximum: 255
+          example: 2
+        - name: duplex
+          in: query
+          required: false
+          description: 是否启用双面打印（覆盖打印机配置）
+          schema:
+            type: string
+            enum: [true, false, yes, no, '1', '0', on, off]
+          example: "true"
+        - name: collate
+          in: query
+          required: false
+          description: 份数排列方式。true=1,2,3,1,2,3（排列）；false=1,1,2,2,3,3（不排列）
+          schema:
+            type: string
+            enum: [true, false, yes, no, '1', '0', on, off]
+            default: "true"
+          example: "true"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - printer_id
+                - file
+              properties:
+                printer_id:
+                  type: string
+                  description: 打印机ID
+                  example: "color-printer"
+                file:
+                  type: string
+                  format: binary
+                  description: 要打印的 PDF 文件
+      responses:
+        '201':
+          description: 打印任务提交成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitPrintJobResponse'
+        '400':
+          description: 请求参数错误或验证失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 打印机不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: CUPS 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags:
+        - 打印任务
+      summary: 列出所有打印任务
+      description: 获取所有打印机的打印任务列表，或指定打印机的任务列表
+      operationId: listPrintJobs
+      parameters:
+        - name: printer_id
+          in: query
+          required: false
+          description: 打印机ID，为空则返回所有打印机的任务
+          schema:
+            type: string
+          example: "color-printer"
+      responses:
+        '200':
+          description: 成功获取打印任务列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PrintJob'
+                  count:
+                    type: integer
+                    example: 3
+                  printer_id:
+                    type: string
+                    description: 查询的打印机ID（仅在指定 printer_id 时返回）
+        '404':
+          description: 打印机不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 服务器错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/jobs/{id}:
+    get:
+      tags:
+        - 打印任务
+      summary: 获取打印任务状态
+      description: 获取指定打印任务的详细状态和信息
+      operationId: getJobStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: 打印任务ID
+          schema:
+            type: string
+          example: "123"
+      responses:
+        '200':
+          description: 成功获取任务状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrintJob'
+        '400':
+          description: 任务ID 格式无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 任务不存在或 CUPS 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 服务器错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags:
+        - 打印任务
+      summary: 取消打印任务
+      description: 取消指定的打印任务
+      operationId: cancelPrintJob
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: 打印任务ID
+          schema:
+            type: string
+          example: "123"
+      responses:
+        '200':
+          description: 任务成功取消
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                    description: 打印任务ID
+                    example: "123"
+                  status:
+                    type: string
+                    description: 取消后的任务状态
+                    example: "cancelled"
+                  reason:
+                    type: string
+                    description: 任务状态原因（可选）
+                    example: "job-canceled-at-device"
+                  message:
+                    type: string
+                    example: "Print job cancellation requested"
+        '400':
+          description: 任务ID 格式无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 任务不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 服务器错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/manual-duplex-hooks/{token}/continue:
+    post:
+      tags:
+        - 手动双面打印
+      summary: 继续手动双面打印（打印第二面）
+      description: |
+        手动双面打印工作流的第二步。
+        用户在打印完第一面后，将纸张翻转放回打印机，调用此接口打印第二面。
+      operationId: continueManualDuplexPrint
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: 手动双面打印令牌（来自提交任务的响应）
+          schema:
+            type: string
+          example: "abc123def456"
+      responses:
+        '201':
+          description: 第二面打印任务提交成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                    description: CUPS 打印任务 ID
+                    example: "456"
+                  printer:
+                    type: string
+                    description: 打印机ID
+                    example: "color-printer"
+                  status:
+                    type: string
+                    enum: [pending]
+                    example: "pending"
+                  duplex:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Remaining pages submitted successfully"
+        '404':
+          description: 令牌不存在或已使用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: CUPS 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/manual-duplex-hooks/{token}/cancel:
+    post:
+      tags:
+        - 手动双面打印
+      summary: 取消手动双面打印流程
+      description: |
+        取消手动双面打印工作流。
+        如果用户在第一面打印后不想继续打印第二面，可调用此接口取消流程。
+      operationId: cancelManualDuplexPrint
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: 手动双面打印令牌（来自提交任务的响应）
+          schema:
+            type: string
+          example: "abc123def456"
+      responses:
+        '200':
+          description: 手动双面打印流程成功取消
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  printer:
+                    type: string
+                    description: 打印机ID
+                    example: "color-printer"
+                  duplex:
+                    type: boolean
+                    example: false
+                  status:
+                    type: string
+                    enum: [cancelled]
+                    example: "cancelled"
+                  message:
+                    type: string
+                    example: "Manual duplex flow cancelled; remaining pages were not submitted"
+                  cancelled:
+                    type: boolean
+                    example: true
+        '404':
+          description: 令牌不存在或已使用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: 错误信息
+        details:
+          type: string
+          description: 错误详情（可选）
+        printer_id:
+          type: string
+          description: 相关的打印机ID（可选）
+        job_id:
+          type: string
+          description: 相关的任务ID（可选）
+      required:
+        - error
+      example:
+        error: "printer_id is required"
+
+    Printer:
+      type: object
+      properties:
+        id:
+          type: string
+          description: 打印机ID
+          example: "color-printer"
+        name:
+          type: string
+          description: 打印机名称
+          example: "Office Color Printer"
+        description:
+          type: string
+          description: 打印机描述
+          example: "Color laser printer in building A"
+        status:
+          type: string
+          description: 打印机状态
+          enum: [idle, processing, stopped]
+          example: "idle"
+        model:
+          type: string
+          description: 打印机型号
+          example: "HP ColorJet Pro"
+        location:
+          type: string
+          description: 打印机位置
+          example: "Building A, 3rd Floor"
+        duplex_mode:
+          type: string
+          description: 双面打印模式
+          enum: [auto, manual, off]
+          example: "manual"
+        reverse:
+          type: boolean
+          description: 是否启用反向打印
+          example: false
+        first_pass:
+          type: string
+          description: 首先打印的页面类型（手动双面打印）
+          enum: [even, odd]
+          example: "even"
+        pad_to_even:
+          type: boolean
+          description: 是否在奇数页数文档后添加空白页
+          example: true
+        reverse_first_pass:
+          type: boolean
+          description: 首先打印是否反向
+          example: false
+        reverse_second_pass:
+          type: boolean
+          description: 第二次打印是否反向
+          example: false
+        rotate_second_pass:
+          type: boolean
+          description: 第二次打印是否旋转 180 度
+          example: false
+        note:
+          type: string
+          description: 打印机备注
+          example: "Remember to load special paper for important documents"
+
+    PrintJob:
+      type: object
+      properties:
+        id:
+          type: string
+          description: 任务 ID
+          example: "123"
+        printer_id:
+          type: string
+          description: 打印机 ID
+          example: "color-printer"
+        title:
+          type: string
+          description: 任务标题
+          example: "printer_test.pdf"
+        status:
+          type: string
+          description: 任务状态
+          enum: [pending, held, processing, stopped, completed, cancelled, aborted]
+          example: "pending"
+        reason:
+          type: string
+          description: 任务状态原因
+          example: "none"
+        raw_state:
+          type: integer
+          description: 原始 IPP 状态码
+          example: 3
+        progress:
+          type: integer
+          description: 任务进度（0-100）
+          example: 0
+        created_at:
+          type: string
+          description: 创建时间
+          example: ""
+        updated_at:
+          type: string
+          description: 更新时间
+          example: ""
+
+    SubmitPrintJobResponse:
+      type: object
+      properties:
+        job_id:
+          type: string
+          description: CUPS 打印任务 ID
+          example: "123"
+        printer:
+          type: string
+          description: 打印机ID
+          example: "color-printer"
+        copies:
+          type: integer
+          description: 打印份数
+          example: 2
+        collate:
+          type: boolean
+          description: 是否排列
+          example: true
+        status:
+          type: string
+          enum: [pending]
+          example: "pending"
+        duplex:
+          type: boolean
+          description: 是否启用双面打印
+          example: false
+        note:
+          type: string
+          description: 打印机备注
+          example: "Color printer"
+        message:
+          type: string
+          example: "Print job submitted successfully"
+        hook_url:
+          type: string
+          description: 手动双面打印继续接口 URL（仅在手动双面模式返回）
+          example: "/api/manual-duplex-hooks/abc123def456/continue"
+        hook_expires_at:
+          type: string
+          format: date-time
+          description: 令牌过期时间（RFC3339，仅在手动双面模式返回）
+          example: "2026-03-30T14:12:54Z"
