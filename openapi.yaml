@@ -23,6 +23,8 @@ servers:
 tags:
   - name: 系统
     description: 系统级接口
+  - name: 飞书鉴权
+    description: 飞书 OAuth2 免登录流程接口
   - name: 打印机管理
     description: 打印机查询和信息接口
   - name: 打印任务
@@ -30,9 +32,13 @@ tags:
   - name: 手动双面打印
     description: 手动双面打印工作流
 
+security:
+  - FeishuBearerAuth: []
+
 paths:
   /health:
     get:
+      security: []
       tags:
         - 系统
       summary: 健康检查
@@ -52,6 +58,166 @@ paths:
                   message:
                     type: string
                     example: "GoPrint is running."
+
+  /api/auth/feishu/authorize-url:
+    get:
+      security: []
+      tags:
+        - 飞书鉴权
+      summary: 生成飞书授权地址
+      description: |
+        生成飞书 OAuth2 授权链接，适用于端外或回退到 authorize 页面的流程。
+        前端端内可优先使用 requestAccess/requestAuthCode 获取 code，再调用 code-login 接口。
+      operationId: buildFeishuAuthorizeURL
+      parameters:
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+          description: CSRF 防护状态值，不传则服务端自动生成
+        - name: redirect_uri
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 回调地址，不传则使用配置文件中的 auth.feishu.redirect_uri
+        - name: scope
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 授权 scope，多个以空格分隔
+        - name: code_challenge
+          in: query
+          required: false
+          schema:
+            type: string
+          description: PKCE challenge
+        - name: code_challenge_method
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [S256, plain]
+          description: PKCE challenge 计算方式
+        - name: prompt
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 授权交互方式（如 consent）
+      responses:
+        '200':
+          description: 成功生成授权地址
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authorize_url:
+                    type: string
+                    example: "https://accounts.feishu.cn/open-apis/authen/v1/authorize?..."
+                  state:
+                    type: string
+                    example: "4f0f8d2f7d7a1b8f..."
+        '400':
+          description: 参数错误或配置缺失
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 服务器错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/feishu/code-login:
+    post:
+      security: []
+      tags:
+        - 飞书鉴权
+      summary: 使用授权码换取 user_access_token 并获取用户信息
+      description: |
+        对应飞书免登流程中的后端步骤：
+        1. 前端通过 requestAccess/requestAuthCode 获取 code
+        2. 后端调用飞书 token 接口换取 user_access_token
+        3. 后端调用 user_info 接口获取当前用户身份
+      operationId: exchangeFeishuCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - code
+              properties:
+                code:
+                  type: string
+                  description: 飞书返回的授权码（5 分钟有效且一次性）
+                redirect_uri:
+                  type: string
+                  description: 与授权时保持一致的 redirect_uri，可选
+                code_verifier:
+                  type: string
+                  description: 若启用 PKCE，此字段必填
+      responses:
+        '200':
+          description: 登录成功并返回 token 和用户信息
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token_type:
+                    type: string
+                    example: "Bearer"
+                  access_token:
+                    type: string
+                  expires_in:
+                    type: integer
+                    example: 7200
+                  expires_at:
+                    type: string
+                    format: date-time
+                    example: "2026-03-30T15:30:00Z"
+                  refresh_token:
+                    type: string
+                  refresh_token_expires_in:
+                    type: integer
+                    example: 604800
+                  refresh_token_expires_at:
+                    type: string
+                    format: date-time
+                  scope:
+                    type: string
+                    example: "auth:user.id:read"
+                  issued_at:
+                    type: string
+                    format: date-time
+                  user:
+                    $ref: '#/components/schemas/FeishuUserInfo'
+        '400':
+          description: 参数错误或配置缺失
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 授权码无效或鉴权失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: 调用飞书服务失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/printers:
     get:
@@ -87,6 +253,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未授权（缺少或无效的飞书 user_access_token）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/printers/{id}:
     get:
@@ -118,6 +290,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: 服务器错误或 CUPS 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未授权（缺少或无效的飞书 user_access_token）
           content:
             application/json:
               schema:
@@ -216,6 +394,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未授权（缺少或无效的飞书 user_access_token）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
     get:
       tags:
@@ -261,6 +445,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未授权（缺少或无效的飞书 user_access_token）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/jobs/{id}:
     get:
@@ -298,6 +488,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: 服务器错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未授权（缺少或无效的飞书 user_access_token）
           content:
             application/json:
               schema:
@@ -354,6 +550,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: 服务器错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未授权（缺少或无效的飞书 user_access_token）
           content:
             application/json:
               schema:
@@ -420,6 +622,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未授权（缺少或无效的飞书 user_access_token）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/manual-duplex-hooks/{token}/cancel:
     post:
@@ -469,8 +677,23 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未授权（缺少或无效的飞书 user_access_token）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
 components:
+  securitySchemes:
+    FeishuBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: user_access_token
+      description: |
+        飞书 OAuth2 网页应用免登方案获取的 user_access_token。
+        在请求头中传递：Authorization: Bearer <user_access_token>
+
   schemas:
     ErrorResponse:
       type: object
@@ -491,6 +714,24 @@ components:
         - error
       example:
         error: "printer_id is required"
+
+    FeishuUserInfo:
+      type: object
+      properties:
+        open_id:
+          type: string
+        union_id:
+          type: string
+        user_id:
+          type: string
+        name:
+          type: string
+        en_name:
+          type: string
+        avatar_url:
+          type: string
+        tenant_key:
+          type: string
 
     Printer:
       type: object

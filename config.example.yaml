@@ -7,6 +7,26 @@ server:
   # API listen port
   port: 5001
 
+auth:
+  # Enable authentication for all API endpoints except /health.
+  enabled: false
+  feishu:
+    # Feishu app credentials from Open Platform.
+    app_id: cli_xxx
+    app_secret: your_app_secret
+    # Optional callback URL for browser-based OAuth redirects.
+    redirect_uri: http://localhost:5001/auth/feishu/callback
+    # OAuth authorize endpoint.
+    authorize_url: https://accounts.feishu.cn/open-apis/authen/v1/authorize
+    # OAuth token endpoint for exchanging code to user_access_token.
+    token_url: https://open.feishu.cn/open-apis/authen/v2/oauth/token
+    # Feishu API used to validate user_access_token.
+    user_info_url: https://open.feishu.cn/open-apis/authen/v1/user_info
+    # Timeout for calling Feishu user info API.
+    request_timeout: 3s
+    # In-memory cache TTL for validated bearer tokens.
+    token_cache_ttl: 2m
+
 printing:
   # Username used in IPP requests (requesting-user-name)
   ipp_username: goprint

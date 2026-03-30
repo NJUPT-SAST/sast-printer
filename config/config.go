@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -12,6 +13,7 @@ import (
 // Config 应用配置
 type Config struct {
 	Server   ServerConfig    `yaml:"server"`
+	Auth     AuthConfig      `yaml:"auth"`
 	Printing PrintingConfig  `yaml:"printing"`
 	Printers []PrinterConfig `yaml:"printers"`
 }
@@ -20,6 +22,24 @@ type Config struct {
 type ServerConfig struct {
 	Port int    `yaml:"port"`
 	Host string `yaml:"host"`
+}
+
+// AuthConfig 鉴权配置
+type AuthConfig struct {
+	Enabled bool             `yaml:"enabled"`
+	Feishu  FeishuAuthConfig `yaml:"feishu"`
+}
+
+// FeishuAuthConfig 飞书 OAuth2 免登鉴权配置
+type FeishuAuthConfig struct {
+	AppID          string `yaml:"app_id"`
+	AppSecret      string `yaml:"app_secret"`
+	RedirectURI    string `yaml:"redirect_uri"`
+	AuthorizeURL   string `yaml:"authorize_url"`
+	TokenURL       string `yaml:"token_url"`
+	UserInfoURL    string `yaml:"user_info_url"`
+	RequestTimeout string `yaml:"request_timeout"`
+	TokenCacheTTL  string `yaml:"token_cache_ttl"`
 }
 
 // PrintingConfig 打印相关全局配置
@@ -81,6 +101,21 @@ func applyDefaults(cfg *Config) {
 	if cfg.Printing.ManualDuplexHookTTL == "" {
 		cfg.Printing.ManualDuplexHookTTL = "30m"
 	}
+	if cfg.Auth.Feishu.UserInfoURL == "" {
+		cfg.Auth.Feishu.UserInfoURL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
+	}
+	if cfg.Auth.Feishu.AuthorizeURL == "" {
+		cfg.Auth.Feishu.AuthorizeURL = "https://accounts.feishu.cn/open-apis/authen/v1/authorize"
+	}
+	if cfg.Auth.Feishu.TokenURL == "" {
+		cfg.Auth.Feishu.TokenURL = "https://open.feishu.cn/open-apis/authen/v2/oauth/token"
+	}
+	if cfg.Auth.Feishu.RequestTimeout == "" {
+		cfg.Auth.Feishu.RequestTimeout = "3s"
+	}
+	if cfg.Auth.Feishu.TokenCacheTTL == "" {
+		cfg.Auth.Feishu.TokenCacheTTL = "2m"
+	}
 
 	for i := range cfg.Printers {
 		p := &cfg.Printers[i]
@@ -98,6 +133,21 @@ func applyDefaults(cfg *Config) {
 }
 
 func validateConfig(cfg *Config) error {
+	if cfg.Auth.Enabled {
+		if strings.TrimSpace(cfg.Auth.Feishu.AppID) == "" {
+			return fmt.Errorf("auth.feishu.app_id is required when auth.enabled=true")
+		}
+		if strings.TrimSpace(cfg.Auth.Feishu.AppSecret) == "" {
+			return fmt.Errorf("auth.feishu.app_secret is required when auth.enabled=true")
+		}
+		if _, err := parsePositiveDuration(cfg.Auth.Feishu.RequestTimeout, "auth.feishu.request_timeout"); err != nil {
+			return err
+		}
+		if _, err := parsePositiveDuration(cfg.Auth.Feishu.TokenCacheTTL, "auth.feishu.token_cache_ttl"); err != nil {
+			return err
+		}
+	}
+
 	if len(cfg.Printers) == 0 {
 		return fmt.Errorf("no printers configured")
 	}
@@ -129,6 +179,14 @@ func validateConfig(cfg *Config) error {
 	}
 
 	return nil
+}
+
+func parsePositiveDuration(raw string, field string) (time.Duration, error) {
+	v, err := time.ParseDuration(strings.TrimSpace(raw))
+	if err != nil || v <= 0 {
+		return 0, fmt.Errorf("invalid %s: %s", field, raw)
+	}
+	return v, nil
 }
 
 func normalizeDuplexMode(mode string) string {
