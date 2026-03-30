@@ -6,6 +6,7 @@ GoPrint 是一个基于 Golang 的打印后端服务，通过 CUPS/IPP 与系统
 
 - 打印机列表与详情查询
 - 打印任务提交（multipart 文件上传）
+- 手动双面打印（奇偶页拆分 + 二段式提交）
 - 打印任务列表、状态查询
 - 打印任务取消
 - 状态细化返回（`status`、`reason`、`raw_state`）
@@ -20,6 +21,7 @@ GoPrint 是一个基于 Golang 的打印后端服务，通过 CUPS/IPP 与系统
 - Linux 系统并已安装/启用 CUPS
 - Go 1.21+
 - 当前进程用户对 CUPS 有查询/提交任务权限
+- 已提供并配置 `config.yaml`
 
 ## 快速开始
 
@@ -34,6 +36,8 @@ go mod tidy
 ```bash
 go run main.go
 ```
+
+服务启动会读取项目根目录的 `config.yaml`。
 
 3. 服务地址
 
@@ -58,6 +62,10 @@ go run main.go
 - `GET /api/jobs/:id`：获取任务详情/状态
 - `DELETE /api/jobs/:id`：取消任务
 
+### 手动双面 Hook 接口
+
+- `POST /api/manual-duplex-hooks/:token/continue`：提交手动双面剩余页面
+
 ## 示例请求
 
 ### 1) 打印机列表
@@ -73,6 +81,23 @@ curl -sS -X POST http://localhost:5001/api/jobs \
     -F printer_id=sast-color-printer \
     -F file=@printer_test.pdf \
     -F copies=1
+```
+
+### 2.1) 提交手动双面任务
+
+```bash
+curl -sS -X POST http://localhost:5001/api/jobs \
+    -F printer_id=sast-color-printer \
+    -F file=@printer_test_3.pdf \
+    -F copies=1
+```
+
+若该打印机在 `config.yaml` 中配置 `duplex_mode: manual`，响应会返回 `hook_url`，用于第二轮打印。
+
+### 2.2) 触发手动双面第二轮
+
+```bash
+curl -sS -X POST http://localhost:5001/api/manual-duplex-hooks/<token>/continue
 ```
 
 ### 3) 查询任务状态
@@ -92,6 +117,64 @@ curl -sS -X DELETE http://localhost:5001/api/jobs/29
 - `status`：归一化后的任务状态（如 `pending`、`processing`、`completed`、`cancelled`）
 - `reason`：CUPS/IPP 原始原因（`job-state-reason`）
 - `raw_state`：IPP 原始状态码
+
+## 手动双面说明
+
+- 启用方式：为打印机配置 `duplex_mode: manual`
+- `duplex_mode: off`：关闭双面功能，按单轮正常打印
+- `duplex_mode: auto`：使用打印机原生双面（IPP `two-sided-long-edge`）
+- `duplex_mode: manual`：执行手动双面（双轮提交 + hook）
+- 当原始文件为 1 页时：无论配置为何，均按单轮打印（不启用双面）
+- `first_pass` 可选 `even` 或 `odd`
+- `reverse_first_pass` / `reverse_second_pass` 控制两轮页序是否反转
+- `rotate_second_pass` 控制二轮文件是否旋转 180 度
+- `pad_to_even` 控制奇数页时是否自动补空白页到偶数
+- 二轮行为：访问返回的 `hook_url`，系统提交剩余页（奇数页）
+- Hook 是一次性的，成功触发后将失效
+
+## 配置文件
+
+系统使用 YAML 配置文件，不再通过环境变量配置服务参数。
+
+默认文件：`config.yaml`
+
+示例：
+
+```yaml
+server:
+    host: 0.0.0.0
+    port: 5001
+
+printing:
+    ipp_username: goprint
+    manual_duplex_hook_ttl: 30m
+
+printers:
+  - id: sast-printer
+    uri: ipp://localhost:631/printers/sast-printer
+    visible: true
+    duplex_mode: off
+    first_pass: even
+    pad_to_even: true
+    reverse_first_pass: false
+    reverse_second_pass: false
+    rotate_second_pass: false
+    note: ""
+```
+
+字段说明：
+
+- `printing.ipp_username`：IPP 请求用户名
+- `printing.manual_duplex_hook_ttl`：手动双面 hook 有效期（默认 `30m`）
+- `printers[].uri`：按打印机配置完整 URI（支持不同打印机在不同 CUPS 地址）
+- `printers[].visible`：是否在 `GET /api/printers` 中返回该打印机
+- `printers[].duplex_mode`：`off` / `auto` / `manual`（默认 `off`）
+- `printers[].first_pass`：`even` / `odd`（默认 `even`）
+- `printers[].pad_to_even`：奇数页时是否补空白页（默认 `true`）
+- `printers[].reverse_first_pass`：首轮页序反转（默认 `false`）
+- `printers[].reverse_second_pass`：二轮页序反转（默认 `false`）
+- `printers[].rotate_second_pass`：二轮旋转 180 度（默认 `false`）
+- `printers[].note`：该打印机的说明文字
 
 ## 项目结构
 

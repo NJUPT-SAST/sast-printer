@@ -14,25 +14,26 @@ import (
 
 // CupsClient CUPS客户端
 type CupsClient struct {
-	Host string
-	Port int
+	Host     string
+	Port     int
+	Username string
 }
 
 // NewCupsClient 创建新的CUPS客户端
-func NewCupsClient(host string, port int) *CupsClient {
+func NewCupsClient(host string, port int, username string) *CupsClient {
+	if strings.TrimSpace(username) == "" {
+		username = "goprint"
+	}
+
 	return &CupsClient{
-		Host: host,
-		Port: port,
+		Host:     host,
+		Port:     port,
+		Username: username,
 	}
 }
 
 func (c *CupsClient) newIPPClient() *ipp.CUPSClient {
-	username := strings.TrimSpace(os.Getenv("USER"))
-	if username == "" {
-		username = "goprint"
-	}
-
-	return ipp.NewCUPSClient(c.Host, c.Port, username, "", false)
+	return ipp.NewCUPSClient(c.Host, c.Port, c.Username, "", false)
 }
 
 // Connect 连接到CUPS服务
@@ -227,6 +228,9 @@ func (c *CupsClient) SubmitJob(printerID string, filePath string, opts PrintOpti
 	jobAttributes := map[string]any{}
 	if opts.Copies > 0 {
 		jobAttributes[ipp.AttributeCopies] = opts.Copies
+	}
+	if strings.TrimSpace(opts.Sides) != "" {
+		jobAttributes[ipp.AttributeSides] = opts.Sides
 	}
 
 	jobID, err := client.PrintJob(ipp.Document{

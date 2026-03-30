@@ -25,5 +25,11 @@ func SetupRouter() *gin.Engine {
 		jobs.DELETE("/:id", CancelPrintJob) // 取消打印任务
 	}
 
+	// 手动双面打印相关接口
+	manualDuplex := router.Group("/api/manual-duplex-hooks")
+	{
+		manualDuplex.POST("/:token/continue", ContinueManualDuplexPrint) // 继续手动双面打印
+	}
+
 	return router
 }

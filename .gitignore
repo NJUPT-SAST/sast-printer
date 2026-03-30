@@ -41,3 +41,6 @@ dist/
 # Local print test files
 printing_test*
 printer_test*
+
+# Configuration files
+config.yaml

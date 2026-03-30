@@ -26,6 +26,7 @@ type PrintJob struct {
 // PrintOptions 打印选项
 type PrintOptions struct {
 	Copies      int    `json:"copies"`
+	Sides       string `json:"sides"`       // one-sided, two-sided-long-edge, two-sided-short-edge
 	ColorModel  string `json:"color_model"` // Color, Gray
 	Orientation string `json:"orientation"` // Portrait, Landscape
 	MediaSize   string `json:"media_size"`  // A4, Letter, etc.

@@ -22,14 +22,47 @@ func HealthCheck(c *gin.Context) {
 
 // ListPrinters 列出所有可用打印机
 func ListPrinters(c *gin.Context) {
-	cupsClient := cups.NewCupsClient("localhost", 631)
-	printers, err := cupsClient.GetPrinters()
+	cfg, err := requireConfig()
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error":   "Cannot connect to CUPS service",
-			"details": err.Error(),
-		})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	configured := cfg.VisiblePrinters()
+	printers := make([]gin.H, 0, len(configured))
+	for _, printerCfg := range configured {
+		cupsClient, printerName, err := newCupsClientForPrinter(printerCfg)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		printer, err := cupsClient.GetPrinterDetails(printerName)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":      "Cannot connect to configured printer",
+				"printer_id": printerCfg.ID,
+				"details":    err.Error(),
+			})
+			return
+		}
+
+		printer.ID = printerCfg.ID
+		printers = append(printers, gin.H{
+			"id":                  printer.ID,
+			"name":                printer.Name,
+			"description":         printer.Description,
+			"status":              printer.Status,
+			"model":               printer.Model,
+			"location":            printer.Location,
+			"duplex_mode":         printerCfg.NormalizedDuplexMode(),
+			"first_pass":          printerCfg.NormalizedFirstPass(),
+			"pad_to_even":         printerCfg.PadToEvenEnabled(),
+			"reverse_first_pass":  printerCfg.ReverseFirstPass,
+			"reverse_second_pass": printerCfg.ReverseSecondPass,
+			"rotate_second_pass":  printerCfg.RotateSecondPass,
+			"note":                printerCfg.Note,
+		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -41,8 +74,19 @@ func ListPrinters(c *gin.Context) {
 // GetPrinterInfo 获取指定打印机的详细信息
 func GetPrinterInfo(c *gin.Context) {
 	printerID := c.Param("id")
-	cupsClient := cups.NewCupsClient("localhost", 631)
-	printer, err := cupsClient.GetPrinterDetails(printerID)
+	printerCfg, err := resolvePrinter(printerID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "printer_id": printerID})
+		return
+	}
+
+	cupsClient, printerName, err := newCupsClientForPrinter(printerCfg)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "printer_id": printerID})
+		return
+	}
+
+	printer, err := cupsClient.GetPrinterDetails(printerName)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error":      "Printer not found or CUPS service unavailable",
@@ -51,8 +95,23 @@ func GetPrinterInfo(c *gin.Context) {
 		})
 		return
 	}
+	printer.ID = printerCfg.ID
 
-	c.JSON(http.StatusOK, printer)
+	c.JSON(http.StatusOK, gin.H{
+		"id":                  printer.ID,
+		"name":                printer.Name,
+		"description":         printer.Description,
+		"status":              printer.Status,
+		"model":               printer.Model,
+		"location":            printer.Location,
+		"duplex_mode":         printerCfg.NormalizedDuplexMode(),
+		"first_pass":          printerCfg.NormalizedFirstPass(),
+		"pad_to_even":         printerCfg.PadToEvenEnabled(),
+		"reverse_first_pass":  printerCfg.ReverseFirstPass,
+		"reverse_second_pass": printerCfg.ReverseSecondPass,
+		"rotate_second_pass":  printerCfg.RotateSecondPass,
+		"note":                printerCfg.Note,
+	})
 }
 
 // SubmitPrintJob 提交打印任务
@@ -96,8 +155,74 @@ func SubmitPrintJob(c *gin.Context) {
 	}
 	defer os.Remove(tempPath)
 
-	cupsClient := cups.NewCupsClient("localhost", 631)
-	jobID, err := cupsClient.SubmitJob(printerID, tempPath, cups.PrintOptions{Copies: copies})
+	printerCfg, err := resolvePrinter(printerID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "printer_id": printerID})
+		return
+	}
+
+	cupsClient, printerName, err := newCupsClientForPrinter(printerCfg)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "printer_id": printerID})
+		return
+	}
+
+	duplexMode := printerCfg.NormalizedDuplexMode()
+	if pageCount, countErr := countPDFPages(tempPath); countErr == nil && pageCount == 1 {
+		duplexMode = "off"
+	}
+
+	if duplexMode == "manual" {
+		firstPassPath, secondPassPath, cleanup, err := prepareManualDuplexFiles(tempPath, printerCfg)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "failed to prepare manual duplex files",
+				"details": err.Error(),
+			})
+			return
+		}
+		defer cleanup()
+
+		initialJobID, err := cupsClient.SubmitJob(printerName, firstPassPath, cups.PrintOptions{Copies: copies})
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":      "failed to submit first pass for manual duplex",
+				"printer_id": printerID,
+				"details":    err.Error(),
+			})
+			return
+		}
+
+		token, err := saveManualDuplexPending(printerID, secondPassPath, copies)
+		if err != nil {
+			_ = os.Remove(secondPassPath)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "failed to create manual duplex hook",
+				"details": err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusCreated, gin.H{
+			"job_id":          initialJobID,
+			"printer":         printerID,
+			"status":          "pending",
+			"manual_duplex":   true,
+			"duplex_mode":     "manual",
+			"note":            printerCfg.Note,
+			"message":         "First pass submitted. Use hook_url to print remaining pages.",
+			"hook_url":        fmt.Sprintf("/api/manual-duplex-hooks/%s/continue", token),
+			"hook_expires_in": getManualDuplexHookTTL().String(),
+		})
+		return
+	}
+
+	printOpts := cups.PrintOptions{Copies: copies}
+	if duplexMode == "auto" {
+		printOpts.Sides = "two-sided-long-edge"
+	}
+
+	jobID, err := cupsClient.SubmitJob(printerName, tempPath, printOpts)
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error":      "failed to submit print job",
@@ -108,21 +233,83 @@ func SubmitPrintJob(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"job_id":  jobID,
-		"printer": printerID,
-		"status":  "pending",
-		"message": "Print job submitted successfully",
+		"job_id":        jobID,
+		"printer":       printerID,
+		"status":        "pending",
+		"manual_duplex": duplexMode == "manual",
+		"duplex_mode":   duplexMode,
+		"note":          printerCfg.Note,
+		"message":       "Print job submitted successfully",
+	})
+}
+
+func ContinueManualDuplexPrint(c *gin.Context) {
+	token := c.Param("token")
+	pending, ok := getManualDuplexPending(token)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "manual duplex hook not found or already used",
+		})
+		return
+	}
+
+	printerCfg, err := resolvePrinter(pending.PrinterID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "printer_id": pending.PrinterID})
+		return
+	}
+
+	cupsClient, printerName, err := newCupsClientForPrinter(printerCfg)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "printer_id": pending.PrinterID})
+		return
+	}
+
+	jobID, err := cupsClient.SubmitJob(printerName, pending.RemainingFilePath, cups.PrintOptions{Copies: pending.Copies})
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":   "failed to submit remaining pages",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	_ = os.Remove(pending.RemainingFilePath)
+	deleteManualDuplexPending(token)
+
+	c.JSON(http.StatusCreated, gin.H{
+		"job_id":        jobID,
+		"printer":       pending.PrinterID,
+		"status":        "pending",
+		"manual_duplex": true,
+		"message":       "Remaining pages submitted successfully",
 	})
 }
 
 // ListPrintJobs 列出所有打印任务
 func ListPrintJobs(c *gin.Context) {
-	cupsClient := cups.NewCupsClient("localhost", 631)
+	cfg, err := requireConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	printerID := c.Query("printer_id")
 
 	if printerID != "" {
+		printerCfg, err := resolvePrinter(printerID)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "printer_id": printerID})
+			return
+		}
+
+		cupsClient, printerName, err := newCupsClientForPrinter(printerCfg)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "printer_id": printerID})
+			return
+		}
+
 		// 获取特定打印机的任务
-		jobs, err := cupsClient.GetPrintJobs(printerID)
+		jobs, err := cupsClient.GetPrintJobs(printerName)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error":      "Failed to get print jobs",
@@ -140,26 +327,26 @@ func ListPrintJobs(c *gin.Context) {
 		return
 	}
 
-	// 获取所有打印机的所有任务
-	printers, err := cupsClient.GetPrinters()
-	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error":   "Cannot connect to CUPS service",
-			"details": err.Error(),
-		})
-		return
-	}
-
 	allJobs := []cups.PrintJob{}
-	for _, printer := range printers {
-		jobs, err := cupsClient.GetPrintJobs(printer.ID)
+	for _, printerCfg := range cfg.Printers {
+		cupsClient, printerName, err := newCupsClientForPrinter(printerCfg)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "printer_id": printerCfg.ID})
+			return
+		}
+
+		jobs, err := cupsClient.GetPrintJobs(printerName)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error":      "Failed to get print jobs",
-				"printer_id": printer.ID,
+				"printer_id": printerCfg.ID,
 				"details":    err.Error(),
 			})
 			return
+		}
+
+		for i := range jobs {
+			jobs[i].PrinterID = printerCfg.ID
 		}
 		allJobs = append(allJobs, jobs...)
 	}
@@ -182,13 +369,32 @@ func GetJobStatus(c *gin.Context) {
 		return
 	}
 
-	cupsClient := cups.NewCupsClient("localhost", 631)
-	job, err := cupsClient.GetPrintJobDetails(jobID)
+	cfg, err := requireConfig()
 	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	var job *cups.PrintJob
+	for _, printerCfg := range cfg.Printers {
+		cupsClient, _, clientErr := newCupsClientForPrinter(printerCfg)
+		if clientErr != nil {
+			continue
+		}
+
+		candidate, queryErr := cupsClient.GetPrintJobDetails(jobID)
+		if queryErr == nil {
+			candidate.PrinterID = printerCfg.ID
+			job = candidate
+			break
+		}
+	}
+
+	if job == nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error":   "Job not found or CUPS service unavailable",
 			"job_id":  jobIDStr,
-			"details": err.Error(),
+			"details": "unable to resolve job from configured printers",
 		})
 		return
 	}
@@ -208,17 +414,53 @@ func CancelPrintJob(c *gin.Context) {
 		return
 	}
 
-	cupsClient := cups.NewCupsClient("localhost", 631)
-	if err := cupsClient.CancelJob(jobIDStr); err != nil {
+	cfg, err := requireConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	var lastErr error
+	cancelled := false
+	for _, printerCfg := range cfg.Printers {
+		cupsClient, _, clientErr := newCupsClientForPrinter(printerCfg)
+		if clientErr != nil {
+			lastErr = clientErr
+			continue
+		}
+
+		if cancelErr := cupsClient.CancelJob(jobIDStr); cancelErr == nil {
+			cancelled = true
+			break
+		} else {
+			lastErr = cancelErr
+		}
+	}
+
+	if !cancelled {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error":   "Failed to cancel print job",
 			"job_id":  jobIDStr,
-			"details": err.Error(),
+			"details": fmt.Sprintf("%v", lastErr),
 		})
 		return
 	}
 
-	job, err := cupsClient.GetPrintJobDetails(jobID)
+	job, err := func() (*cups.PrintJob, error) {
+		for _, printerCfg := range cfg.Printers {
+			cupsClient, _, clientErr := newCupsClientForPrinter(printerCfg)
+			if clientErr != nil {
+				continue
+			}
+
+			candidate, queryErr := cupsClient.GetPrintJobDetails(jobID)
+			if queryErr == nil {
+				candidate.PrinterID = printerCfg.ID
+				return candidate, nil
+			}
+		}
+		return nil, fmt.Errorf("cancelled but unable to re-query job")
+	}()
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"job_id":  jobIDStr,

@@ -1,0 +1,51 @@
+# GoPrint example configuration (safe to commit)
+# Copy this file to config.yaml and adjust values for your environment.
+
+server:
+  # Bind address for HTTP server
+  host: 0.0.0.0
+  # API listen port
+  port: 5001
+
+printing:
+  # Username used in IPP requests (requesting-user-name)
+  ipp_username: goprint
+  # Manual duplex hook expiration; Go duration format (e.g. 10m, 30m, 1h)
+  manual_duplex_hook_ttl: 30m
+
+printers:
+  # Example 1: visible in frontend printer list
+  - id: default-printer
+    uri: ipp://localhost:631/printers/default-printer
+    visible: true
+    duplex_mode: off
+    first_pass: even
+    pad_to_even: true
+    reverse_first_pass: false
+    reverse_second_pass: false
+    rotate_second_pass: false
+    note: ""
+
+  # Example 2: native duplex supported by printer
+  - id: native-duplex-printer
+    uri: ipp://localhost:631/printers/native-duplex-printer
+    visible: true
+    duplex_mode: auto
+    first_pass: even
+    pad_to_even: true
+    reverse_first_pass: false
+    reverse_second_pass: false
+    rotate_second_pass: false
+    note: "native duplex supported"
+
+  # Example 3: configured but hidden from frontend list
+  - id: internal-backup-printer
+    uri: ipp://127.0.0.1:631/printers/internal-backup-printer
+    visible: false
+    duplex_mode: manual
+    first_pass: odd
+    pad_to_even: true
+    reverse_first_pass: true
+    reverse_second_pass: true
+    rotate_second_pass: true
+    note: "manual duplex profile for this model"
