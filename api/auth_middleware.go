@@ -1,9 +1,10 @@
 package api
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"goprint/config"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -43,20 +44,35 @@ var feishuTokenCache = struct {
 // AuthRequired 对除健康检查外的业务接口执行飞书 OAuth2 user_access_token 校验。
 func AuthRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		start := time.Now()
+		method := c.Request.Method
+		path := c.FullPath()
+		if path == "" {
+			path = c.Request.URL.Path
+		}
+		clientIP := c.ClientIP()
+
 		cfg, err := requireConfig()
 		if err != nil {
+			log.Printf("[auth][middleware] config error method=%s path=%s ip=%s err=%v", method, path, clientIP, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			c.Abort()
 			return
 		}
 
 		if !cfg.Auth.Enabled {
+			log.Printf("[auth][middleware] skip auth (disabled) method=%s path=%s ip=%s", method, path, clientIP)
 			c.Next()
 			return
 		}
 
-		token := extractBearerToken(c.GetHeader("Authorization"))
+		authHeader := c.GetHeader("Authorization")
+		token := extractBearerToken(authHeader)
+		log.Printf("[auth][middleware] auth check method=%s path=%s ip=%s auth_header_present=%t token=%s",
+			method, path, clientIP, strings.TrimSpace(authHeader) != "", maskSensitive(token))
+
 		if token == "" {
+			log.Printf("[auth][middleware] reject missing bearer method=%s path=%s ip=%s", method, path, clientIP)
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"error": "missing Authorization Bearer token",
 			})
@@ -66,6 +82,8 @@ func AuthRequired() gin.HandlerFunc {
 
 		user, validateErr := validateFeishuToken(token, cfg)
 		if validateErr != nil {
+			log.Printf("[auth][middleware] reject unauthorized method=%s path=%s ip=%s token=%s err=%v cost=%s",
+				method, path, clientIP, maskSensitive(token), validateErr, time.Since(start))
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"error":   "unauthorized",
 				"details": validateErr.Error(),
@@ -76,6 +94,8 @@ func AuthRequired() gin.HandlerFunc {
 
 		c.Set("auth_provider", "feishu")
 		c.Set("auth_user", user)
+		log.Printf("[auth][middleware] auth success method=%s path=%s ip=%s token=%s user_id=%s open_id=%s cost=%s",
+			method, path, clientIP, maskSensitive(token), maskSensitive(user.UserID), maskSensitive(user.OpenID), time.Since(start))
 		c.Next()
 	}
 }
@@ -99,8 +119,10 @@ func validateFeishuToken(token string, cfg *config.Config) (feishuUserInfo, erro
 	cached, ok := feishuTokenCache.items[token]
 	feishuTokenCache.RUnlock()
 	if ok && now.Before(cached.ExpiresAt) {
+		log.Printf("[auth][token] cache hit token=%s expire_at=%s", maskSensitive(token), cached.ExpiresAt.Format(time.RFC3339))
 		return cached.User, nil
 	}
+	log.Printf("[auth][token] cache miss token=%s", maskSensitive(token))
 
 	cacheTTL, err := time.ParseDuration(cfg.Auth.Feishu.TokenCacheTTL)
 	if err != nil || cacheTTL <= 0 {
@@ -109,6 +131,7 @@ func validateFeishuToken(token string, cfg *config.Config) (feishuUserInfo, erro
 
 	user, err := fetchFeishuUserInfo(token, cfg)
 	if err != nil {
+		log.Printf("[auth][token] validate failed token=%s err=%v", maskSensitive(token), err)
 		return feishuUserInfo{}, err
 	}
 
@@ -118,51 +141,38 @@ func validateFeishuToken(token string, cfg *config.Config) (feishuUserInfo, erro
 		ExpiresAt: now.Add(cacheTTL),
 	}
 	feishuTokenCache.Unlock()
+	log.Printf("[auth][token] cache set token=%s ttl=%s", maskSensitive(token), cacheTTL)
 
 	return user, nil
 }
 
 func fetchFeishuUserInfo(token string, cfg *config.Config) (feishuUserInfo, error) {
-	requestTimeout, err := time.ParseDuration(cfg.Auth.Feishu.RequestTimeout)
-	if err != nil || requestTimeout <= 0 {
-		requestTimeout = 3 * time.Second
-	}
-
-	url := strings.TrimSpace(cfg.Auth.Feishu.UserInfoURL)
-	if url == "" {
-		url = "https://open.feishu.cn/open-apis/authen/v1/user_info"
-	}
-
-	client := &http.Client{Timeout: requestTimeout}
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	sdkClient, err := newFeishuSDKClient(cfg)
 	if err != nil {
 		return feishuUserInfo{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 
-	resp, err := client.Do(req)
+	resp, err := sdkClient.getUserInfo(context.Background(), token)
 	if err != nil {
-		return feishuUserInfo{}, fmt.Errorf("failed to verify token with Feishu: %w", err)
+		log.Printf("[auth][userinfo] sdk call failed token=%s err=%v", maskSensitive(token), err)
+		return feishuUserInfo{}, err
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return feishuUserInfo{}, fmt.Errorf("feishu user_info returned status %d", resp.StatusCode)
+	if resp == nil || resp.Data == nil {
+		log.Printf("[auth][userinfo] empty response token=%s", maskSensitive(token))
+		return feishuUserInfo{}, fmt.Errorf("empty response from feishu user_info")
 	}
-
-	var payload feishuUserInfoResponse
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return feishuUserInfo{}, fmt.Errorf("failed to parse feishu user_info response: %w", err)
-	}
-
-	if payload.Code != 0 {
-		return feishuUserInfo{}, fmt.Errorf("feishu user_info error: %s (code=%d)", payload.Msg, payload.Code)
+	if !resp.Success() {
+		log.Printf("[auth][userinfo] feishu reject token=%s code=%d msg=%q request_id=%s", maskSensitive(token), resp.Code, resp.Msg, resp.RequestId())
+		return feishuUserInfo{}, fmt.Errorf("feishu user_info error: %s (code=%d, request_id=%s)", resp.Msg, resp.Code, resp.RequestId())
 	}
 
-	if payload.Data.UserID == "" && payload.Data.OpenID == "" && payload.Data.UnionID == "" {
+	user := mapSDKUserInfo(resp.Data)
+	if user.UserID == "" && user.OpenID == "" && user.UnionID == "" {
+		log.Printf("[auth][userinfo] identity missing token=%s", maskSensitive(token))
 		return feishuUserInfo{}, fmt.Errorf("feishu user_info response missing user identity")
 	}
 
-	return payload.Data, nil
+	log.Printf("[auth][userinfo] success token=%s user_id=%s open_id=%s", maskSensitive(token), maskSensitive(user.UserID), maskSensitive(user.OpenID))
+
+	return user, nil
 }

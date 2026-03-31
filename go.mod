@@ -5,8 +5,10 @@ go 1.21
 require (
 	github.com/gin-gonic/gin v1.9.1
 	github.com/go-pdf/fpdf v0.9.0
+	github.com/larksuite/oapi-sdk-go/v3 v3.5.3
 	github.com/pdfcpu/pdfcpu v0.8.1
 	github.com/phin1x/go-ipp v1.7.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -40,5 +42,4 @@ require (
 	golang.org/x/text v0.17.0 // indirect
 	google.golang.org/protobuf v1.30.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

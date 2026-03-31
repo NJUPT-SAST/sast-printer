@@ -5,14 +5,16 @@ import "github.com/gin-gonic/gin"
 // SetupRouter 配置API路由
 func SetupRouter() *gin.Engine {
 	router := gin.Default()
+	router.Use(IPRateLimit())
 
 	// 健康检查
 	router.GET("/health", HealthCheck)
 	authMiddleware := AuthRequired()
 
 	// 飞书免登流程接口（前端用 code 换 token）
-	feishuAuth := router.Group("/api/auth/feishu")
+	feishuAuth := router.Group("/api/auth/config")
 	{
+		feishuAuth.GET("", GetAuthConfig) // 返回认证配置（appID等）给前端
 		feishuAuth.GET("/authorize-url", BuildFeishuAuthorizeURL)
 		feishuAuth.POST("/code-login", ExchangeFeishuCode)
 	}
