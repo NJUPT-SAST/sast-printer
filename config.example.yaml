@@ -27,6 +27,17 @@ auth:
     # In-memory cache TTL for validated bearer tokens.
     token_cache_ttl: 2m
 
+job_store:
+  # Enable Bitable-backed print job storage and user-scoped query for /api/jobs.
+  enabled: false
+  feishu:
+    # Bitable app token, found in Base URL.
+    app_token: appxxxxxxxxxxxxxxxx
+    # Bitable table id, found in table URL.
+    table_id: tblxxxxxxxxxxxxxxxx
+    # Timeout for Bitable OpenAPI calls.
+    request_timeout: 3s
+
 printing:
   # Username used in IPP requests (requesting-user-name)
   ipp_username: goprint

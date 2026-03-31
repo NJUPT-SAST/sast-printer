@@ -14,6 +14,7 @@ import (
 type Config struct {
 	Server   ServerConfig    `yaml:"server"`
 	Auth     AuthConfig      `yaml:"auth"`
+	JobStore JobStoreConfig  `yaml:"job_store"`
 	Printing PrintingConfig  `yaml:"printing"`
 	Printers []PrinterConfig `yaml:"printers"`
 }
@@ -40,6 +41,19 @@ type FeishuAuthConfig struct {
 	UserInfoURL    string `yaml:"user_info_url"`
 	RequestTimeout string `yaml:"request_timeout"`
 	TokenCacheTTL  string `yaml:"token_cache_ttl"`
+}
+
+// JobStoreConfig 打印任务存储配置
+type JobStoreConfig struct {
+	Enabled bool                `yaml:"enabled"`
+	Feishu  FeishuBitableConfig `yaml:"feishu"`
+}
+
+// FeishuBitableConfig 飞书多维表配置
+type FeishuBitableConfig struct {
+	AppToken       string `yaml:"app_token"`
+	TableID        string `yaml:"table_id"`
+	RequestTimeout string `yaml:"request_timeout"`
 }
 
 // PrintingConfig 打印相关全局配置
@@ -116,6 +130,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Auth.Feishu.TokenCacheTTL == "" {
 		cfg.Auth.Feishu.TokenCacheTTL = "2m"
 	}
+	if cfg.JobStore.Feishu.RequestTimeout == "" {
+		cfg.JobStore.Feishu.RequestTimeout = "3s"
+	}
 
 	for i := range cfg.Printers {
 		p := &cfg.Printers[i]
@@ -144,6 +161,18 @@ func validateConfig(cfg *Config) error {
 			return err
 		}
 		if _, err := parsePositiveDuration(cfg.Auth.Feishu.TokenCacheTTL, "auth.feishu.token_cache_ttl"); err != nil {
+			return err
+		}
+	}
+
+	if cfg.JobStore.Enabled {
+		if strings.TrimSpace(cfg.JobStore.Feishu.AppToken) == "" {
+			return fmt.Errorf("job_store.feishu.app_token is required when job_store.enabled=true")
+		}
+		if strings.TrimSpace(cfg.JobStore.Feishu.TableID) == "" {
+			return fmt.Errorf("job_store.feishu.table_id is required when job_store.enabled=true")
+		}
+		if _, err := parsePositiveDuration(cfg.JobStore.Feishu.RequestTimeout, "job_store.feishu.request_timeout"); err != nil {
 			return err
 		}
 	}

@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -9,10 +11,38 @@ import (
 	"strings"
 	"time"
 
+	"goprint/config"
 	"goprint/cups"
 
 	"github.com/gin-gonic/gin"
 )
+
+func currentAuthUser(c *gin.Context) (feishuUserInfo, bool) {
+	v, ok := c.Get("auth_user")
+	if !ok {
+		return feishuUserInfo{}, false
+	}
+	user, ok := v.(feishuUserInfo)
+	if !ok {
+		return feishuUserInfo{}, false
+	}
+	if user.UserID == "" && user.OpenID == "" && user.UnionID == "" {
+		return feishuUserInfo{}, false
+	}
+	return user, true
+}
+
+func persistPrintJobToBitable(c *gin.Context, cfg *config.Config, record printJobRecord) {
+	store, err := newBitableJobStore(cfg)
+	if err != nil {
+		log.Printf("[jobs] skip bitable persist: %v", err)
+		return
+	}
+
+	if err := store.SaveJob(context.Background(), record); err != nil {
+		log.Printf("[jobs] bitable persist failed job_id=%s printer=%s err=%v", record.JobID, record.PrinterID, err)
+	}
+}
 
 // HealthCheck 健康检查接口
 func HealthCheck(c *gin.Context) {
@@ -304,6 +334,21 @@ func SubmitPrintJob(c *gin.Context) {
 			"hook_url":        fmt.Sprintf("/api/manual-duplex-hooks/%s/continue", token),
 			"hook_expires_at": expiresAt.UTC().Format(time.RFC3339),
 		})
+
+		if user, ok := currentAuthUser(c); ok {
+			cfg, cfgErr := requireConfig()
+			if cfgErr == nil {
+				persistPrintJobToBitable(c, cfg, printJobRecord{
+					JobID:     initialJobID,
+					PrinterID: printerID,
+					FileName:  file.Filename,
+					Status:    "pending_manual_continue",
+					Copies:    copies,
+					Duplex:    true,
+					User:      user,
+				})
+			}
+		}
 		return
 	}
 
@@ -360,6 +405,21 @@ func SubmitPrintJob(c *gin.Context) {
 		"note":    printerCfg.Note,
 		"message": "Print job submitted successfully",
 	})
+
+	if user, ok := currentAuthUser(c); ok {
+		cfg, cfgErr := requireConfig()
+		if cfgErr == nil {
+			persistPrintJobToBitable(c, cfg, printJobRecord{
+				JobID:     jobID,
+				PrinterID: printerID,
+				FileName:  file.Filename,
+				Status:    "pending",
+				Copies:    copies,
+				Duplex:    duplexMode != "off",
+				User:      user,
+			})
+		}
+	}
 }
 
 func ContinueManualDuplexPrint(c *gin.Context) {
@@ -434,67 +494,42 @@ func ListPrintJobs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	printerID := c.Query("printer_id")
 
-	if printerID != "" {
-		printerCfg, err := resolvePrinter(printerID)
-		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "printer_id": printerID})
-			return
-		}
+	user, ok := currentAuthUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing authenticated user context"})
+		return
+	}
 
-		cupsClient, printerName, err := newCupsClientForPrinter(printerCfg)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "printer_id": printerID})
-			return
-		}
-
-		// 获取特定打印机的任务
-		jobs, err := cupsClient.GetPrintJobs(printerName)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":      "Failed to get print jobs",
-				"printer_id": printerID,
-				"details":    err.Error(),
-			})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"jobs":       jobs,
-			"count":      len(jobs),
-			"printer_id": printerID,
+	store, err := newBitableJobStore(cfg)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":   "job store is not available",
+			"details": err.Error(),
 		})
 		return
 	}
 
-	allJobs := []cups.PrintJob{}
-	for _, printerCfg := range cfg.Printers {
-		cupsClient, printerName, err := newCupsClientForPrinter(printerCfg)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "printer_id": printerCfg.ID})
-			return
-		}
+	printerID := c.Query("printer_id")
+	allJobs, err := store.ListJobsByUser(context.Background(), user, 500)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query jobs from bitable", "details": err.Error()})
+		return
+	}
 
-		jobs, err := cupsClient.GetPrintJobs(printerName)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":      "Failed to get print jobs",
-				"printer_id": printerCfg.ID,
-				"details":    err.Error(),
-			})
-			return
+	jobs := make([]map[string]interface{}, 0, len(allJobs))
+	for _, job := range allJobs {
+		if printerID != "" {
+			if fmt.Sprint(job["printer"]) != printerID {
+				continue
+			}
 		}
-
-		for i := range jobs {
-			jobs[i].PrinterID = printerCfg.ID
-		}
-		allJobs = append(allJobs, jobs...)
+		jobs = append(jobs, job)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"jobs":  allJobs,
-		"count": len(allJobs),
+		"jobs":  jobs,
+		"count": len(jobs),
 	})
 }
 

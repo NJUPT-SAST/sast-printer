@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	ipMaxQPS         = 5
+	ipMaxQPS         = 10
 	ipWindowDuration = time.Second
-	ipBlockDuration  = 60 * time.Second
+	ipBlockDuration  = 10 * time.Second
 )
 
 type ipRateState struct {
