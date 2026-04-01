@@ -5,14 +5,20 @@ import (
 	"goprint/api"
 	"goprint/config"
 	"log"
+	"os"
 )
 
 func main() {
 	fmt.Println("GoPrint is starting...")
 
-	cfg, err := config.LoadFromFile("config.yaml")
+	configPath := "config.yaml"
+	if len(os.Args) > 1 {
+		configPath = os.Args[1]
+	}
+
+	cfg, err := config.LoadFromFile(configPath)
 	if err != nil {
-		log.Fatalf("Failed to load config.yaml: %v", err)
+		log.Fatalf("Failed to load config %s: %v", configPath, err)
 	}
 	api.SetConfig(cfg)
 

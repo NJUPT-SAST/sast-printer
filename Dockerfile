@@ -21,3 +21,4 @@ COPY --chown=nonroot:nonroot config.example.yaml /app/config.yaml
 EXPOSE 5001
 
 ENTRYPOINT ["/app/goprint"]
+CMD ["/app/config.yaml"]
