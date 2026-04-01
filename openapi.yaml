@@ -502,8 +502,10 @@ paths:
     delete:
       tags:
         - 打印任务
-      summary: 取消打印任务
-      description: 取消指定的打印任务
+      summary: 删除任务记录
+      description: |
+        仅删除飞书多维表中的任务记录，不会向打印机发送取消指令。
+        如需停止实际打印，请在打印机面板上手动取消任务。
       operationId: cancelPrintJob
       parameters:
         - name: id
@@ -515,7 +517,7 @@ paths:
           example: "123"
       responses:
         '200':
-          description: 任务成功取消
+          description: 任务记录删除成功
           content:
             application/json:
               schema:
@@ -527,15 +529,11 @@ paths:
                     example: "123"
                   status:
                     type: string
-                    description: 取消后的任务状态
-                    example: "cancelled"
-                  reason:
-                    type: string
-                    description: 任务状态原因（可选）
-                    example: "job-canceled-at-device"
+                    description: 删除结果状态
+                    example: "deleted"
                   message:
                     type: string
-                    example: "Print job cancellation requested"
+                    example: "Task removed from bitable only. Please cancel the physical print job on printer panel if needed."
         '400':
           description: 任务ID 格式无效
           content:
@@ -543,7 +541,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
-          description: 任务不存在
+          description: 任务不存在（或不属于当前用户）
           content:
             application/json:
               schema:
@@ -798,44 +796,36 @@ components:
 
     PrintJob:
       type: object
+      description: 从飞书多维表返回的打印任务记录
       properties:
         id:
-          type: string
-          description: 任务 ID
-          example: "123"
+          type: integer
+          description: 任务ID（Bitable 自增序号）
+          example: 1
         printer_id:
           type: string
           description: 打印机 ID
-          example: "color-printer"
-        title:
+          example: "sast-printer"
+        file_name:
           type: string
-          description: 任务标题
-          example: "printer_test.pdf"
+          description: 打印的文件名
+          example: "document.pdf"
         status:
           type: string
-          description: 任务状态
-          enum: [pending, held, processing, stopped, completed, cancelled, aborted]
+          description: 任务状态（pending, completed, failed 等）
           example: "pending"
-        reason:
-          type: string
-          description: 任务状态原因
-          example: "none"
-        raw_state:
+        copies:
           type: integer
-          description: 原始 IPP 状态码
-          example: 3
-        progress:
-          type: integer
-          description: 任务进度（0-100）
-          example: 0
-        created_at:
+          description: 打印份数
+          example: 1
+        duplex:
+          type: boolean
+          description: 是否启用双面打印
+          example: true
+        submitted_at:
           type: string
-          description: 创建时间
-          example: ""
-        updated_at:
-          type: string
-          description: 更新时间
-          example: ""
+          description: 提交时间，格式为 yyyy-MM-dd HH:mm（例如 2026-04-01 15:39）
+          example: "2026-04-01 15:39"
 
     SubmitPrintJobResponse:
       type: object

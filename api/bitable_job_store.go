@@ -84,16 +84,16 @@ func (s *bitableJobStore) SaveJob(ctx context.Context, record printJobRecord) er
 		bitableFieldDuplex:    record.Duplex,
 	}
 
-	userIDType, userIDValue := resolveUserIDTypeAndValue(record.User)
-	if userIDValue == "" {
-		return fmt.Errorf("missing user identity for bitable person field")
+	openID := strings.TrimSpace(record.User.OpenID)
+	if openID == "" {
+		return fmt.Errorf("missing open_id for bitable person field")
 	}
-	fields[bitableFieldUser] = []map[string]string{{"id": userIDValue}}
+	fields[bitableFieldUser] = []map[string]string{{"id": openID}}
 
 	req := larkbitable.NewCreateAppTableRecordReqBuilder().
 		AppToken(s.appToken).
 		TableId(s.tableID).
-		UserIdType(userIDType).
+		UserIdType(larkbitable.UserIdTypeCreateAppTableRecordOpenId).
 		AppTableRecord(larkbitable.NewAppTableRecordBuilder().
 			Fields(fields).
 			Build()).
@@ -125,11 +125,10 @@ func (s *bitableJobStore) ListJobsByUser(ctx context.Context, user feishuUserInf
 	pageToken := ""
 
 	for len(jobs) < limit {
-		userIDType, _ := resolveUserIDTypeAndValue(user)
 		reqBuilder := larkbitable.NewListAppTableRecordReqBuilder().
 			AppToken(s.appToken).
 			TableId(s.tableID).
-			UserIdType(userIDType).
+			UserIdType(larkbitable.UserIdTypeListAppTableRecordOpenId).
 			PageSize(100)
 		if pageToken != "" {
 			reqBuilder = reqBuilder.PageToken(pageToken)
@@ -177,7 +176,7 @@ func isOwnedByUser(fields map[string]interface{}, user feishuUserInfo) bool {
 	if len(personIDs) == 0 {
 		return false
 	}
-	_, expectedID := resolveUserIDTypeAndValue(user)
+	expectedID := strings.TrimSpace(user.OpenID)
 	if expectedID == "" {
 		return false
 	}
@@ -198,22 +197,39 @@ func mapRecordToJob(record *larkbitable.AppTableRecord) map[string]interface{} {
 		"status":       fieldAsString(fields[bitableFieldStatus]),
 		"copies":       fieldAsInt(fields[bitableFieldCopies]),
 		"duplex":       fieldAsBool(fields[bitableFieldDuplex]),
-		"submitted_at": fieldAsString(fields[bitableFieldSubmittedAt]),
+		"submitted_at": fieldAsBitableDateTime(fields[bitableFieldSubmittedAt]),
 	}
 	return job
 }
 
-func resolveUserIDTypeAndValue(user feishuUserInfo) (string, string) {
-	if strings.TrimSpace(user.OpenID) != "" {
-		return larkbitable.UserIdTypeCreateAppTableRecordOpenId, strings.TrimSpace(user.OpenID)
+func fieldAsBitableDateTime(v interface{}) string {
+	const outputLayout = "2006-01-02 15:04"
+
+	switch val := v.(type) {
+	case float64:
+		return time.UnixMilli(int64(val)).In(time.Local).Format(outputLayout)
+	case int64:
+		return time.UnixMilli(val).In(time.Local).Format(outputLayout)
+	case int:
+		return time.UnixMilli(int64(val)).In(time.Local).Format(outputLayout)
+	case string:
+		s := strings.TrimSpace(val)
+		if s == "" {
+			return ""
+		}
+
+		if ms, err := strconv.ParseInt(s, 10, 64); err == nil {
+			return time.UnixMilli(ms).In(time.Local).Format(outputLayout)
+		}
+
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			return t.In(time.Local).Format(outputLayout)
+		}
+
+		return s
+	default:
+		return ""
 	}
-	if strings.TrimSpace(user.UserID) != "" {
-		return larkbitable.UserIdTypeCreateAppTableRecordUserId, strings.TrimSpace(user.UserID)
-	}
-	if strings.TrimSpace(user.UnionID) != "" {
-		return larkbitable.UserIdTypeCreateAppTableRecordUnionId, strings.TrimSpace(user.UnionID)
-	}
-	return larkbitable.UserIdTypeCreateAppTableRecordUserId, ""
 }
 
 func fieldAsPersonIDs(v interface{}) []string {
@@ -289,4 +305,168 @@ func fieldAsBool(v interface{}) bool {
 	default:
 		return false
 	}
+}
+
+// UpdateJobStatus 根据 job_id 更新任务状态
+func (s *bitableJobStore) UpdateJobStatus(ctx context.Context, jobID string, newStatus string) error {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	// 1. 查询所有记录以找到对应的 job_id
+	recordID := ""
+	pageToken := ""
+
+	for recordID == "" {
+		reqBuilder := larkbitable.NewListAppTableRecordReqBuilder().
+			AppToken(s.appToken).
+			TableId(s.tableID).
+			PageSize(100)
+		if pageToken != "" {
+			reqBuilder = reqBuilder.PageToken(pageToken)
+		}
+
+		resp, err := s.client.Bitable.AppTableRecord.List(ctx, reqBuilder.Build())
+		if err != nil {
+			return fmt.Errorf("bitable list records failed: %w", err)
+		}
+		if resp == nil || !resp.Success() || resp.Data == nil {
+			return fmt.Errorf("bitable list records failed: code=%d msg=%s", resp.Code, resp.Msg)
+		}
+
+		for _, item := range resp.Data.Items {
+			if item == nil {
+				continue
+			}
+			if fieldAsString(item.Fields[bitableFieldJobID]) == jobID {
+				if item.RecordId != nil {
+					recordID = *item.RecordId
+				}
+				break
+			}
+		}
+
+		if recordID != "" {
+			break
+		}
+
+		if resp.Data.HasMore == nil || !*resp.Data.HasMore || resp.Data.PageToken == nil || *resp.Data.PageToken == "" {
+			break
+		}
+		pageToken = *resp.Data.PageToken
+	}
+
+	if recordID == "" {
+		return fmt.Errorf("job_id not found in bitable: %s", jobID)
+	}
+
+	// 2. 更新记录的状态字段
+	fields := map[string]interface{}{
+		bitableFieldStatus: newStatus,
+	}
+
+	req := larkbitable.NewUpdateAppTableRecordReqBuilder().
+		AppToken(s.appToken).
+		TableId(s.tableID).
+		RecordId(recordID).
+		AppTableRecord(larkbitable.NewAppTableRecordBuilder().
+			Fields(fields).
+			Build()).
+		Build()
+
+	updateResp, err := s.client.Bitable.AppTableRecord.Update(ctx, req)
+	if err != nil {
+		return fmt.Errorf("bitable update record failed: %w", err)
+	}
+	if updateResp == nil || !updateResp.Success() {
+		if updateResp == nil {
+			return fmt.Errorf("bitable update record failed: empty response")
+		}
+		return fmt.Errorf("bitable update record failed: code=%d msg=%s", updateResp.Code, updateResp.Msg)
+	}
+
+	return nil
+}
+
+// DeleteJobByUserAndJobID 根据当前用户和 job_id 删除多维表中的任务记录。
+func (s *bitableJobStore) DeleteJobByUserAndJobID(ctx context.Context, user feishuUserInfo, jobID string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return false, fmt.Errorf("job_id is required")
+	}
+
+	recordID := ""
+	pageToken := ""
+
+	for recordID == "" {
+		reqBuilder := larkbitable.NewListAppTableRecordReqBuilder().
+			AppToken(s.appToken).
+			TableId(s.tableID).
+			UserIdType(larkbitable.UserIdTypeListAppTableRecordOpenId).
+			PageSize(100)
+		if pageToken != "" {
+			reqBuilder = reqBuilder.PageToken(pageToken)
+		}
+
+		resp, err := s.client.Bitable.AppTableRecord.List(ctx, reqBuilder.Build())
+		if err != nil {
+			return false, fmt.Errorf("bitable list records failed: %w", err)
+		}
+		if resp == nil || !resp.Success() || resp.Data == nil {
+			if resp == nil {
+				return false, fmt.Errorf("bitable list records failed: empty response")
+			}
+			return false, fmt.Errorf("bitable list records failed: code=%d msg=%s request_id=%s", resp.Code, resp.Msg, resp.RequestId())
+		}
+
+		for _, item := range resp.Data.Items {
+			if item == nil || item.Fields == nil {
+				continue
+			}
+			if !isOwnedByUser(item.Fields, user) {
+				continue
+			}
+			if fieldAsString(item.Fields[bitableFieldJobID]) != jobID {
+				continue
+			}
+			if item.RecordId != nil {
+				recordID = *item.RecordId
+			}
+			break
+		}
+
+		if recordID != "" {
+			break
+		}
+
+		if resp.Data.HasMore == nil || !*resp.Data.HasMore || resp.Data.PageToken == nil || *resp.Data.PageToken == "" {
+			break
+		}
+		pageToken = *resp.Data.PageToken
+	}
+
+	if recordID == "" {
+		return false, nil
+	}
+
+	delReq := larkbitable.NewDeleteAppTableRecordReqBuilder().
+		AppToken(s.appToken).
+		TableId(s.tableID).
+		RecordId(recordID).
+		Build()
+
+	delResp, err := s.client.Bitable.AppTableRecord.Delete(ctx, delReq)
+	if err != nil {
+		return false, fmt.Errorf("bitable delete record failed: %w", err)
+	}
+	if delResp == nil || !delResp.Success() {
+		if delResp == nil {
+			return false, fmt.Errorf("bitable delete record failed: empty response")
+		}
+		return false, fmt.Errorf("bitable delete record failed: code=%d msg=%s request_id=%s", delResp.Code, delResp.Msg, delResp.RequestId())
+	}
+
+	return true, nil
 }

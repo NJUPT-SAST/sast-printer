@@ -188,7 +188,7 @@ func ExchangeFeishuCode(c *gin.Context) {
 
 	result["issued_at"] = now.Format(time.RFC3339)
 	result["feishu_code"] = strconv.Itoa(tokenResp.Code)
-	log.Printf("[auth][code-login] done ip=%s user_id=%s open_id=%s cost=%s", c.ClientIP(), maskSensitive(user.UserID), maskSensitive(user.OpenID), time.Since(start))
+	log.Printf("[auth][code-login] done ip=%s open_id=%s cost=%s", c.ClientIP(), maskSensitive(user.OpenID), time.Since(start))
 
 	c.JSON(http.StatusOK, result)
 }

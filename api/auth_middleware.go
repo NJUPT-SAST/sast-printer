@@ -94,8 +94,8 @@ func AuthRequired() gin.HandlerFunc {
 
 		c.Set("auth_provider", "feishu")
 		c.Set("auth_user", user)
-		log.Printf("[auth][middleware] auth success method=%s path=%s ip=%s token=%s user_id=%s open_id=%s cost=%s",
-			method, path, clientIP, maskSensitive(token), maskSensitive(user.UserID), maskSensitive(user.OpenID), time.Since(start))
+		log.Printf("[auth][middleware] auth success method=%s path=%s ip=%s token=%s open_id=%s cost=%s",
+			method, path, clientIP, maskSensitive(token), maskSensitive(user.OpenID), time.Since(start))
 		c.Next()
 	}
 }
@@ -172,7 +172,7 @@ func fetchFeishuUserInfo(token string, cfg *config.Config) (feishuUserInfo, erro
 		return feishuUserInfo{}, fmt.Errorf("feishu user_info response missing user identity")
 	}
 
-	log.Printf("[auth][userinfo] success token=%s user_id=%s open_id=%s", maskSensitive(token), maskSensitive(user.UserID), maskSensitive(user.OpenID))
+	log.Printf("[auth][userinfo] success token=%s open_id=%s", maskSensitive(token), maskSensitive(user.OpenID))
 
 	return user, nil
 }

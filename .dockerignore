@@ -1,0 +1,11 @@
+.git
+.gitignore
+.vscode
+
+*.pdf
+
+tmp
+*.log
+
+# Local runtime config should be mounted, not baked.
+config.yaml

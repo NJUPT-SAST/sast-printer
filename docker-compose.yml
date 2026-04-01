@@ -1,0 +1,15 @@
+version: "3.9"
+
+services:
+  goprint:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: goprint
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

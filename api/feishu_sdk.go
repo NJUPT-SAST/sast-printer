@@ -107,12 +107,12 @@ func (c *feishuSDKClient) getUserInfo(ctx context.Context, token string) (*larke
 		return nil, fmt.Errorf("empty response from feishu user_info api")
 	}
 
-	userID := ""
+	openID := ""
 	if resp.Data != nil {
-		userID = resp.Data.UserID
+		openID = resp.Data.OpenID
 	}
-	log.Printf("[auth][sdk] user_info done token=%s success=%v feishu_code=%d feishu_msg=%q request_id=%s user_id=%s",
-		maskSensitive(token), resp.Success(), resp.Code, resp.Msg, resp.RequestId(), maskSensitive(userID))
+	log.Printf("[auth][sdk] user_info done token=%s success=%v feishu_code=%d feishu_msg=%q request_id=%s open_id=%s",
+		maskSensitive(token), resp.Success(), resp.Code, resp.Msg, resp.RequestId(), maskSensitive(openID))
 
 	return resp, nil
 }

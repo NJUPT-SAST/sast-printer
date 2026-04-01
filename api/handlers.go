@@ -26,7 +26,7 @@ func currentAuthUser(c *gin.Context) (feishuUserInfo, bool) {
 	if !ok {
 		return feishuUserInfo{}, false
 	}
-	if user.UserID == "" && user.OpenID == "" && user.UnionID == "" {
+	if strings.TrimSpace(user.OpenID) == "" {
 		return feishuUserInfo{}, false
 	}
 	return user, true
@@ -331,7 +331,7 @@ func SubmitPrintJob(c *gin.Context) {
 			"duplex":          true,
 			"note":            printerCfg.Note,
 			"message":         "First pass submitted. Use hook_url to print remaining pages.",
-			"hook_url":        fmt.Sprintf("/api/manual-duplex-hooks/%s/continue", token),
+			"hook_url":        fmt.Sprintf("/manual-duplex-hooks/%s/continue", token),
 			"hook_expires_at": expiresAt.UTC().Format(time.RFC3339),
 		})
 
@@ -347,6 +347,12 @@ func SubmitPrintJob(c *gin.Context) {
 					Duplex:    true,
 					User:      user,
 				})
+
+				// 将任务注册到后台轮询器
+				tracker := initJobStatusPoller(cfg)
+				if tracker != nil {
+					tracker.AddPendingJob(initialJobID, printerID)
+				}
 			}
 		}
 		return
@@ -418,6 +424,12 @@ func SubmitPrintJob(c *gin.Context) {
 				Duplex:    duplexMode != "off",
 				User:      user,
 			})
+
+			// 将任务注册到后台轮询器
+			tracker := initJobStatusPoller(cfg)
+			if tracker != nil {
+				tracker.AddPendingJob(jobID, printerID)
+			}
 		}
 	}
 }
@@ -463,6 +475,17 @@ func ContinueManualDuplexPrint(c *gin.Context) {
 		"duplex":  true,
 		"message": "Remaining pages submitted successfully",
 	})
+
+	// 将第二遍任务也注册到后台轮询器
+	if _, ok := currentAuthUser(c); ok {
+		cfg, cfgErr := requireConfig()
+		if cfgErr == nil {
+			tracker := initJobStatusPoller(cfg)
+			if tracker != nil {
+				tracker.AddPendingJob(jobID, pending.PrinterID)
+			}
+		}
+	}
 }
 
 func CancelManualDuplexPrint(c *gin.Context) {
@@ -581,8 +604,7 @@ func GetJobStatus(c *gin.Context) {
 // CancelPrintJob 取消打印任务
 func CancelPrintJob(c *gin.Context) {
 	jobIDStr := c.Param("id")
-	jobID, err := strconv.Atoi(jobIDStr)
-	if err != nil {
+	if strings.TrimSpace(jobIDStr) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":  "Invalid job ID format",
 			"job_id": jobIDStr,
@@ -596,60 +618,42 @@ func CancelPrintJob(c *gin.Context) {
 		return
 	}
 
-	var lastErr error
-	cancelled := false
-	for _, printerCfg := range cfg.Printers {
-		cupsClient, _, clientErr := newCupsClientForPrinter(printerCfg)
-		if clientErr != nil {
-			lastErr = clientErr
-			continue
-		}
-
-		if cancelErr := cupsClient.CancelJob(jobIDStr); cancelErr == nil {
-			cancelled = true
-			break
-		} else {
-			lastErr = cancelErr
-		}
+	user, ok := currentAuthUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing authenticated user context"})
+		return
 	}
 
-	if !cancelled {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error":   "Failed to cancel print job",
-			"job_id":  jobIDStr,
-			"details": fmt.Sprintf("%v", lastErr),
+	store, err := newBitableJobStore(cfg)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":   "job store is not available",
+			"details": err.Error(),
 		})
 		return
 	}
 
-	job, err := func() (*cups.PrintJob, error) {
-		for _, printerCfg := range cfg.Printers {
-			cupsClient, _, clientErr := newCupsClientForPrinter(printerCfg)
-			if clientErr != nil {
-				continue
-			}
-
-			candidate, queryErr := cupsClient.GetPrintJobDetails(jobID)
-			if queryErr == nil {
-				candidate.PrinterID = printerCfg.ID
-				return candidate, nil
-			}
-		}
-		return nil, fmt.Errorf("cancelled but unable to re-query job")
-	}()
+	deleted, err := store.DeleteJobByUserAndJobID(context.Background(), user, jobIDStr)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "failed to delete print job from bitable",
 			"job_id":  jobIDStr,
-			"status":  "cancelled",
-			"message": "Print job cancelled",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	if !deleted {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error":  "job not found",
+			"job_id": jobIDStr,
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"job_id":  jobIDStr,
-		"status":  job.Status,
-		"reason":  job.Reason,
-		"message": "Print job cancellation requested",
+		"status":  "deleted",
+		"message": "Task removed from bitable only. Please cancel the physical print job on printer panel if needed.",
 	})
 }
