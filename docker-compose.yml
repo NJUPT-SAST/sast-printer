@@ -2,6 +2,7 @@ version: "3.9"
 
 services:
   goprint:
+    build: .
     image: sast/sast-goprint:current
     container_name: sast-goprint
     restart: always

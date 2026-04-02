@@ -17,6 +17,7 @@ FROM scratch
 WORKDIR /app
 
 COPY --from=builder /out/goprint /app/goprint
+COPY public ./public
 
 EXPOSE 5001
 
