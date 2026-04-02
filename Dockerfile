@@ -12,11 +12,11 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/goprint ./main.go
 
-FROM gcr.io/distroless/static-debian12:nonroot
+# Using scratch image for minimized size
+FROM scratch
 WORKDIR /app
 
 COPY --from=builder /out/goprint /app/goprint
-COPY --chown=nonroot:nonroot config.example.yaml /app/config.yaml
 
 EXPOSE 5001
 

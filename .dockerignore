@@ -9,3 +9,6 @@ tmp
 
 # Local runtime config should be mounted, not baked.
 config.yaml
+docker-compose.yml
+Dockerfile
+README.md
