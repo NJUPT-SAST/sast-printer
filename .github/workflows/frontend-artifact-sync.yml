@@ -1,0 +1,75 @@
+name: Sync Frontend Artifact
+
+on:
+  repository_dispatch:
+    types:
+      - build-backend
+
+permissions:
+  contents: write
+
+env:
+  FRONTEND_REPOSITORY: NJUPT-SAST/sast-printer-next-frontend
+  DEFAULT_ARTIFACT_NAME: frontend-dist
+
+jobs:
+  sync-frontend-assets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout backend repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.CROSS_REPO_PAT }}
+
+      - name: Validate dispatch payload
+        id: payload
+        run: |
+          set -euo pipefail
+
+          run_id="${{ github.event.client_payload.frontend_run_id }}"
+          if [ -z "$run_id" ]; then
+            echo "Missing client_payload.frontend_run_id"
+            echo "Expected repository_dispatch payload example:"
+            echo '{"event_type":"build-backend","client_payload":{"frontend_run_id":123456789}}'
+            exit 1
+          fi
+
+          artifact_name="${{ github.event.client_payload.artifact_name }}"
+          if [ -z "$artifact_name" ]; then
+            artifact_name="${DEFAULT_ARTIFACT_NAME}"
+          fi
+
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.payload.outputs.artifact_name }}
+          run-id: ${{ steps.payload.outputs.run_id }}
+          repository: ${{ env.FRONTEND_REPOSITORY }}
+          github-token: ${{ secrets.CROSS_REPO_PAT }}
+          path: ./frontend-dist
+
+      - name: Sync artifact to public directory
+        run: |
+          set -euo pipefail
+          mkdir -p public
+          find public -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          cp -a frontend-dist/. public/
+
+      - name: Commit and push changes
+        run: |
+          set -euo pipefail
+
+          if [ -z "$(git status --porcelain -- public)" ]; then
+            echo "No frontend asset changes detected."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add public
+          git commit -m "chore(public): sync frontend assets from run ${{ steps.payload.outputs.run_id }}"
+          git push

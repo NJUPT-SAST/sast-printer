@@ -1,6 +1,13 @@
 package api
 
-import "github.com/gin-gonic/gin"
+import (
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/gin-gonic/gin"
+)
 
 // SetupRouter 配置API路由
 func SetupRouter() *gin.Engine {
@@ -45,5 +52,51 @@ func SetupRouter() *gin.Engine {
 		manualDuplex.POST("/:token/cancel", CancelManualDuplexPrint)     // 取消手动双面打印
 	}
 
+	// 前端路由：从 public 目录读取静态资源，并为 SPA 路由回退 index.html。
+	registerFrontendRoutes(router)
+
 	return router
+}
+
+func registerFrontendRoutes(router *gin.Engine) {
+	const publicRoot = "public"
+	indexPath := filepath.Join(publicRoot, "index.html")
+
+	router.NoRoute(func(c *gin.Context) {
+		path := c.Request.URL.Path
+		method := c.Request.Method
+
+		if strings.HasPrefix(path, "/api/") || path == "/api" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+
+		if method != http.MethodGet && method != http.MethodHead {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+
+		cleanPath := filepath.Clean("/" + path)
+		if cleanPath == "/" {
+			if _, err := os.Stat(indexPath); err == nil {
+				c.File(indexPath)
+				return
+			}
+			c.JSON(http.StatusNotFound, gin.H{"error": "frontend index not found"})
+			return
+		}
+
+		candidate := filepath.Join(publicRoot, strings.TrimPrefix(cleanPath, "/"))
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			c.File(candidate)
+			return
+		}
+
+		if _, err := os.Stat(indexPath); err == nil {
+			c.File(indexPath)
+			return
+		}
+
+		c.JSON(http.StatusNotFound, gin.H{"error": "frontend index not found"})
+	})
 }
