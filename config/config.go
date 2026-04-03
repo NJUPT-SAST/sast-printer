@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -12,11 +13,12 @@ import (
 
 // Config 应用配置
 type Config struct {
-	Server   ServerConfig    `yaml:"server"`
-	Auth     AuthConfig      `yaml:"auth"`
-	JobStore JobStoreConfig  `yaml:"job_store"`
-	Printing PrintingConfig  `yaml:"printing"`
-	Printers []PrinterConfig `yaml:"printers"`
+	Server           ServerConfig           `yaml:"server"`
+	Auth             AuthConfig             `yaml:"auth"`
+	JobStore         JobStoreConfig         `yaml:"job_store"`
+	Printing         PrintingConfig         `yaml:"printing"`
+	OfficeConversion OfficeConversionConfig `yaml:"office_conversion"`
+	Printers         []PrinterConfig        `yaml:"printers"`
 }
 
 // ServerConfig 服务器配置
@@ -60,6 +62,17 @@ type FeishuBitableConfig struct {
 type PrintingConfig struct {
 	IPPUsername         string `yaml:"ipp_username"`
 	ManualDuplexHookTTL string `yaml:"manual_duplex_hook_ttl"`
+}
+
+// OfficeConversionConfig Office 文档转换配置（通过 Python gRPC 服务）
+type OfficeConversionConfig struct {
+	Enabled         bool     `yaml:"enabled"`
+	StartWithServer bool     `yaml:"start_with_server"`
+	ServiceScript   string   `yaml:"service_script"`
+	AcceptedFormats []string `yaml:"accepted_formats"`
+	GRPCAddress     string   `yaml:"grpc_address"`
+	RequestTimeout  string   `yaml:"request_timeout"`
+	OutputDir       string   `yaml:"output_dir"`
 }
 
 // PrinterConfig 单台打印机配置
@@ -114,6 +127,32 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Printing.ManualDuplexHookTTL == "" {
 		cfg.Printing.ManualDuplexHookTTL = "30m"
+	}
+	if cfg.OfficeConversion.GRPCAddress == "" {
+		cfg.OfficeConversion.GRPCAddress = "127.0.0.1:50061"
+	}
+	if cfg.OfficeConversion.ServiceScript == "" {
+		cfg.OfficeConversion.ServiceScript = "office_converter/run.sh"
+	}
+	if len(cfg.OfficeConversion.AcceptedFormats) == 0 {
+		cfg.OfficeConversion.AcceptedFormats = []string{"doc", "docx", "ppt", "pptx"}
+	}
+	normalizedFormats := make([]string, 0, len(cfg.OfficeConversion.AcceptedFormats))
+	for _, f := range cfg.OfficeConversion.AcceptedFormats {
+		nf := normalizeOfficeFormat(f)
+		if nf != "" {
+			normalizedFormats = append(normalizedFormats, nf)
+		}
+	}
+	if len(normalizedFormats) == 0 {
+		normalizedFormats = []string{"doc", "docx", "ppt", "pptx"}
+	}
+	cfg.OfficeConversion.AcceptedFormats = normalizedFormats
+	if cfg.OfficeConversion.RequestTimeout == "" {
+		cfg.OfficeConversion.RequestTimeout = "60s"
+	}
+	if cfg.OfficeConversion.OutputDir == "" {
+		cfg.OfficeConversion.OutputDir = "office_converter/output"
 	}
 	if cfg.Auth.Feishu.UserInfoURL == "" {
 		cfg.Auth.Feishu.UserInfoURL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
@@ -177,6 +216,36 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 
+	if cfg.OfficeConversion.Enabled {
+		if len(cfg.OfficeConversion.AcceptedFormats) == 0 {
+			return fmt.Errorf("office_conversion.accepted_formats must not be empty when office_conversion.enabled=true")
+		}
+		for _, f := range cfg.OfficeConversion.AcceptedFormats {
+			switch normalizeOfficeFormat(f) {
+			case "doc", "docx", "ppt", "pptx":
+			default:
+				return fmt.Errorf("unsupported office_conversion.accepted_formats entry: %s", f)
+			}
+		}
+		if strings.TrimSpace(cfg.OfficeConversion.GRPCAddress) == "" {
+			return fmt.Errorf("office_conversion.grpc_address is required when office_conversion.enabled=true")
+		}
+		if _, err := parsePositiveDuration(cfg.OfficeConversion.RequestTimeout, "office_conversion.request_timeout"); err != nil {
+			return err
+		}
+		if strings.TrimSpace(cfg.OfficeConversion.OutputDir) == "" {
+			return fmt.Errorf("office_conversion.output_dir is required when office_conversion.enabled=true")
+		}
+		if cfg.OfficeConversion.StartWithServer {
+			if strings.TrimSpace(cfg.OfficeConversion.ServiceScript) == "" {
+				return fmt.Errorf("office_conversion.service_script is required when office_conversion.start_with_server=true")
+			}
+			if _, err := os.Stat(filepath.Clean(cfg.OfficeConversion.ServiceScript)); err != nil {
+				return fmt.Errorf("office_conversion.service_script is not accessible: %w", err)
+			}
+		}
+	}
+
 	if len(cfg.Printers) == 0 {
 		return fmt.Errorf("no printers configured")
 	}
@@ -208,6 +277,12 @@ func validateConfig(cfg *Config) error {
 	}
 
 	return nil
+}
+
+func normalizeOfficeFormat(raw string) string {
+	v := strings.TrimSpace(strings.ToLower(raw))
+	v = strings.TrimPrefix(v, ".")
+	return v
 }
 
 func parsePositiveDuration(raw string, field string) (time.Duration, error) {

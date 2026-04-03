@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+option go_package = "goprint/api/pb;pb";
+option java_multiple_files = true;
+
+package office_converter;
+
+// 文件转换请求
+message ConversionRequest {
+  string source_file_path = 1;  // 源文件路径（绝对路径）
+  string target_format = 2;      // 目标格式（必须为 "pdf"）
+}
+
+// 文件转换响应
+message ConversionResponse {
+  bool success = 1;              // 是否成功
+  string output_file_path = 2;   // 输出文件路径（成功时有效）
+  string error_message = 3;      // 错误信息（失败时有效）
+  string error_code = 4;         // 错误代码
+}
+
+// 服务定义
+service OfficeConverterService {
+  // 转换单个Office文件到PDF
+  rpc ConvertToPdf(ConversionRequest) returns (ConversionResponse);
+}

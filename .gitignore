@@ -44,3 +44,7 @@ printer_test*
 
 # Configuration files
 config.yaml
+
+# Python office converter artifacts
+office_converter/.venv/
+office_converter/output/
