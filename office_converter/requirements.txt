@@ -1,0 +1,4 @@
+grpcio==1.78.0
+grpcio-tools==1.78.0
+protobuf==6.33.6
+pywpsrpc==2.3.12

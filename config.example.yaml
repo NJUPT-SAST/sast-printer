@@ -44,6 +44,22 @@ printing:
   # Manual duplex hook expiration; Go duration format (e.g. 10m, 30m, 1h)
   manual_duplex_hook_ttl: 30m
 
+office_conversion:
+  # Enable Python gRPC office converter for doc/docx/ppt/pptx.
+  enabled: false
+  # If true, GoPrint will start office converter process with server startup.
+  start_with_server: false
+  # Startup script path for office converter process.
+  service_script: office_converter/run.sh
+  # Accepted source formats for conversion. Do not include pdf here.
+  accepted_formats: [doc, docx, ppt, pptx]
+  # Python gRPC server address.
+  grpc_address: 127.0.0.1:50061
+  # Timeout for each conversion RPC call.
+  request_timeout: 60s
+  # Shared converted-file path. Go reads converted PDF from here.
+  output_dir: office_converter/output
+
 printers:
   # Example 1: visible in frontend printer list
   - id: default-printer

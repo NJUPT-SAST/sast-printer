@@ -220,6 +220,30 @@ func SubmitPrintJob(c *gin.Context) {
 		return
 	}
 
+	cfg, cfgErr := requireConfig()
+	if cfgErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": cfgErr.Error()})
+		return
+	}
+
+	if !isSupportedUploadFile(cfg, file.Filename) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":      "unsupported file type, accepted formats are configured by office_conversion.accepted_formats plus pdf",
+			"error_code": "unsupported_file_type",
+		})
+		return
+	}
+
+	if err := acquirePrintSubmitQueue(c.Request.Context()); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":      "print queue is busy or request cancelled",
+			"error_code": "print_queue_unavailable",
+			"details":    err.Error(),
+		})
+		return
+	}
+	defer releasePrintSubmitQueue()
+
 	tempDir := os.TempDir()
 	tempPath := filepath.Join(tempDir, fmt.Sprintf("goprint-%d-%s", os.Getpid(), filepath.Base(file.Filename)))
 	if err := c.SaveUploadedFile(file, tempPath); err != nil {
@@ -230,6 +254,22 @@ func SubmitPrintJob(c *gin.Context) {
 		return
 	}
 	defer os.Remove(tempPath)
+
+	printSourcePath := tempPath
+	convertedPath := ""
+	if isOfficeConvertible(cfg, file.Filename) {
+		convertedPath, err = convertOfficeToPDF(c.Request.Context(), cfg, tempPath)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":      "failed to convert office file to pdf",
+				"error_code": "office_conversion_failed",
+				"details":    err.Error(),
+			})
+			return
+		}
+		defer os.Remove(convertedPath)
+		printSourcePath = convertedPath
+	}
 
 	printerCfg, err := resolvePrinter(printerID)
 	if err != nil {
@@ -247,7 +287,7 @@ func SubmitPrintJob(c *gin.Context) {
 	if !duplexRequested {
 		duplexMode = "off"
 	}
-	if pageCount, countErr := countPDFPages(tempPath); countErr == nil && pageCount == 1 {
+	if pageCount, countErr := countPDFPages(printSourcePath); countErr == nil && pageCount == 1 {
 		duplexMode = "off"
 	}
 
@@ -271,7 +311,7 @@ func SubmitPrintJob(c *gin.Context) {
 	}
 
 	if duplexMode == "manual" {
-		firstPassPath, secondPassPath, cleanup, err := prepareManualDuplexFiles(tempPath, printerCfg)
+		firstPassPath, secondPassPath, cleanup, err := prepareManualDuplexFiles(printSourcePath, printerCfg)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error":   "failed to prepare manual duplex files",
@@ -361,9 +401,9 @@ func SubmitPrintJob(c *gin.Context) {
 		return
 	}
 
-	printPath := tempPath
+	printPath := printSourcePath
 	if duplexMode == "off" && printerCfg.Reverse {
-		reversedPath, reverseErr := prepareReversedPDF(tempPath)
+		reversedPath, reverseErr := prepareReversedPDF(printSourcePath)
 		if reverseErr != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error":   "failed to reverse document for single-side printing",
@@ -371,7 +411,7 @@ func SubmitPrintJob(c *gin.Context) {
 			})
 			return
 		}
-		if reversedPath != tempPath {
+		if reversedPath != printSourcePath {
 			defer os.Remove(reversedPath)
 			printPath = reversedPath
 		}

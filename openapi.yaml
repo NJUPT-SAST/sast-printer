@@ -387,7 +387,7 @@ paths:
                 file:
                   type: string
                   format: binary
-                  description: 要打印的 PDF 文件
+                  description: 要打印的文件（支持 pdf/doc/docx/ppt/pptx，Office 文件会自动转换为 PDF）
       responses:
         '201':
           description: 打印任务提交成功
@@ -414,7 +414,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: CUPS 服务不可用
+          description: CUPS 服务不可用或 Office 转换服务不可用
           content:
             application/json:
               schema:
