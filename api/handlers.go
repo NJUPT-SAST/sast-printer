@@ -334,7 +334,7 @@ func SubmitPrintJob(c *gin.Context) {
 			"note":            printerCfg.Note,
 			"message":         "First pass submitted. Use hook_url to print remaining pages.",
 			"hook_url":        hookURL,
-			"hook_expires_at": expiresAt.UTC().Format(time.RFC3339),
+			"hook_expires_at": expiresAt.In(time.Local).Format("2006-01-02 15:04"),
 		})
 
 		if user, ok := currentAuthUser(c); ok {

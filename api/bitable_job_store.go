@@ -259,7 +259,7 @@ func mapRecordToJob(record *larkbitable.AppTableRecord) map[string]interface{} {
 	hookExpiresAt := ""
 	if duplexHook != "" {
 		if expiresAt, ok := calcDuplexHookExpiresAt(fields[bitableFieldSubmittedAt]); ok {
-			hookExpiresAt = expiresAt.Format(time.RFC3339)
+			hookExpiresAt = expiresAt.In(time.Local).Format("2006-01-02 15:04")
 		}
 	}
 

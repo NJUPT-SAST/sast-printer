@@ -59,7 +59,33 @@ paths:
                     type: string
                     example: "GoPrint is running."
 
-  /api/auth/feishu/authorize-url:
+  /api/auth/config:
+    get:
+      security: []
+      tags:
+        - 飞书鉴权
+      summary: 获取前端鉴权配置
+      description: 返回前端初始化飞书免登所需的配置项。
+      operationId: getAuthConfig
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  app_id:
+                    type: string
+                    example: "cli_xxx"
+        '500':
+          description: 服务器错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/config/authorize-url:
     get:
       security: []
       tags:
@@ -134,7 +160,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
-  /api/auth/feishu/code-login:
+  /api/auth/config/code-login:
     post:
       security: []
       tags:
@@ -315,7 +341,6 @@ paths:
         - 单面打印（duplex_mode=off）
         - 份数控制（copies 参数）
         - 排列方式（collate 参数）
-        - 反向打印（reverse 参数）
       operationId: submitPrintJob
       parameters:
         - name: copies
@@ -426,19 +451,10 @@ paths:
                   jobs:
                     type: array
                     items:
-                      $ref: '#/components/schemas/PrintJob'
+                      $ref: '#/components/schemas/BitablePrintJob'
                   count:
                     type: integer
                     example: 3
-                  printer_id:
-                    type: string
-                    description: 查询的打印机ID（仅在指定 printer_id 时返回）
-        '404':
-          description: 打印机不存在
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: 服务器错误
           content:
@@ -473,7 +489,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PrintJob'
+                $ref: '#/components/schemas/CupsPrintJob'
         '400':
           description: 任务ID 格式无效
           content:
@@ -794,7 +810,7 @@ components:
           description: 打印机备注
           example: "Remember to load special paper for important documents"
 
-    PrintJob:
+    BitablePrintJob:
       type: object
       description: 从飞书多维表返回的打印任务记录
       properties:
@@ -826,6 +842,55 @@ components:
           type: string
           description: 提交时间，格式为 yyyy-MM-dd HH:mm（例如 2026-04-01 15:39）
           example: "2026-04-01 15:39"
+        duplex_hook:
+          type: string
+          description: 手动双面继续打印的 hook URL（无则为空）
+          example: "/manual-duplex-hooks/abc123def456/continue"
+        hook_expires_at:
+          type: string
+          description: hook 过期时间，格式为 yyyy-MM-dd HH:mm（submitted_at + manual_duplex_hook_ttl，仅 duplex_hook 存在时返回）
+          example: "2026-04-01 16:09"
+
+    CupsPrintJob:
+      type: object
+      description: 从 CUPS 查询的单个任务状态
+      properties:
+        id:
+          type: string
+          description: CUPS 任务 ID
+          example: "123"
+        printer_id:
+          type: string
+          description: 打印机 ID
+          example: "sast-printer"
+        title:
+          type: string
+          description: 任务标题
+          example: "document.pdf"
+        status:
+          type: string
+          description: 任务状态
+          example: "processing"
+        reason:
+          type: string
+          description: CUPS 返回的状态原因
+          example: "none"
+        raw_state:
+          type: integer
+          description: IPP 原始状态码
+          example: 5
+        progress:
+          type: integer
+          description: 进度（当前实现固定为 0）
+          example: 0
+        created_at:
+          type: string
+          description: 任务创建时间（当前实现可能为空）
+          example: ""
+        updated_at:
+          type: string
+          description: 任务更新时间（当前实现可能为空）
+          example: ""
 
     SubmitPrintJobResponse:
       type: object
@@ -864,9 +929,8 @@ components:
         hook_url:
           type: string
           description: 手动双面打印继续接口 URL（仅在手动双面模式返回）
-          example: "/api/manual-duplex-hooks/abc123def456/continue"
+          example: "/manual-duplex-hooks/abc123def456/continue"
         hook_expires_at:
           type: string
-          format: date-time
-          description: 令牌过期时间（RFC3339，仅在手动双面模式返回）
-          example: "2026-03-30T14:12:54Z"
+          description: 令牌过期时间，格式为 yyyy-MM-dd HH:mm（仅在手动双面模式返回）
+          example: "2026-03-30 22:12"
