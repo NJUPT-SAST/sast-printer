@@ -20,6 +20,7 @@ const (
 	bitableFieldStatus      = "status"
 	bitableFieldCopies      = "copies"
 	bitableFieldDuplex      = "duplex"
+	bitableFieldDuplexHook  = "duplex_hook"
 	bitableFieldUser        = "user"
 	bitableFieldSubmittedAt = "submitted_at"
 )
@@ -32,13 +33,20 @@ type bitableJobStore struct {
 }
 
 type printJobRecord struct {
+	JobID      string
+	PrinterID  string
+	FileName   string
+	Status     string
+	Copies     int
+	Duplex     bool
+	DuplexHook string
+	User       feishuUserInfo
+}
+
+type trackableJob struct {
 	JobID     string
 	PrinterID string
-	FileName  string
 	Status    string
-	Copies    int
-	Duplex    bool
-	User      feishuUserInfo
 }
 
 func newBitableJobStore(cfg *config.Config) (*bitableJobStore, error) {
@@ -84,6 +92,10 @@ func (s *bitableJobStore) SaveJob(ctx context.Context, record printJobRecord) er
 		bitableFieldDuplex:    record.Duplex,
 	}
 
+	if v := strings.TrimSpace(record.DuplexHook); v != "" {
+		fields[bitableFieldDuplexHook] = v
+	}
+
 	openID := strings.TrimSpace(record.User.OpenID)
 	if openID == "" {
 		return fmt.Errorf("missing open_id for bitable person field")
@@ -111,6 +123,58 @@ func (s *bitableJobStore) SaveJob(ctx context.Context, record printJobRecord) er
 	}
 
 	return nil
+}
+
+func (s *bitableJobStore) ListTrackableJobs(ctx context.Context) ([]trackableJob, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	out := make([]trackableJob, 0)
+	pageToken := ""
+
+	for {
+		reqBuilder := larkbitable.NewListAppTableRecordReqBuilder().
+			AppToken(s.appToken).
+			TableId(s.tableID).
+			PageSize(100)
+		if pageToken != "" {
+			reqBuilder = reqBuilder.PageToken(pageToken)
+		}
+
+		resp, err := s.client.Bitable.AppTableRecord.List(ctx, reqBuilder.Build())
+		if err != nil {
+			return nil, fmt.Errorf("bitable list records failed: %w", err)
+		}
+		if resp == nil || !resp.Success() || resp.Data == nil {
+			if resp == nil {
+				return nil, fmt.Errorf("bitable list records failed: empty response")
+			}
+			return nil, fmt.Errorf("bitable list records failed: code=%d msg=%s", resp.Code, resp.Msg)
+		}
+
+		for _, item := range resp.Data.Items {
+			if item == nil {
+				continue
+			}
+			jobID := strings.TrimSpace(fieldAsString(item.Fields[bitableFieldJobID]))
+			printerID := strings.TrimSpace(fieldAsString(item.Fields[bitableFieldPrinterID]))
+			status := strings.ToLower(strings.TrimSpace(fieldAsString(item.Fields[bitableFieldStatus])))
+			if jobID == "" || printerID == "" {
+				continue
+			}
+			switch status {
+			case "pending", "held", "processing", "pending_manual_continue":
+				out = append(out, trackableJob{JobID: jobID, PrinterID: printerID, Status: status})
+			}
+		}
+
+		if resp.Data.HasMore == nil || !*resp.Data.HasMore || resp.Data.PageToken == nil || *resp.Data.PageToken == "" {
+			break
+		}
+		pageToken = *resp.Data.PageToken
+	}
+
+	return out, nil
 }
 
 func (s *bitableJobStore) ListJobsByUser(ctx context.Context, user feishuUserInfo, limit int) ([]map[string]interface{}, error) {
@@ -190,6 +254,15 @@ func isOwnedByUser(fields map[string]interface{}, user feishuUserInfo) bool {
 
 func mapRecordToJob(record *larkbitable.AppTableRecord) map[string]interface{} {
 	fields := record.Fields
+	submittedAt := fieldAsBitableDateTime(fields[bitableFieldSubmittedAt])
+	duplexHook := fieldAsString(fields[bitableFieldDuplexHook])
+	hookExpiresAt := ""
+	if duplexHook != "" {
+		if expiresAt, ok := calcDuplexHookExpiresAt(fields[bitableFieldSubmittedAt]); ok {
+			hookExpiresAt = expiresAt.Format(time.RFC3339)
+		}
+	}
+
 	job := map[string]interface{}{
 		"id":           fieldAsInt(fields[bitableFieldID]),
 		"printer_id":   fieldAsString(fields[bitableFieldPrinterID]),
@@ -197,9 +270,49 @@ func mapRecordToJob(record *larkbitable.AppTableRecord) map[string]interface{} {
 		"status":       fieldAsString(fields[bitableFieldStatus]),
 		"copies":       fieldAsInt(fields[bitableFieldCopies]),
 		"duplex":       fieldAsBool(fields[bitableFieldDuplex]),
-		"submitted_at": fieldAsBitableDateTime(fields[bitableFieldSubmittedAt]),
+		"submitted_at": submittedAt,
+		"duplex_hook":  duplexHook,
 	}
+
+	if hookExpiresAt != "" {
+		job["hook_expires_at"] = hookExpiresAt
+	}
+
 	return job
+}
+
+func calcDuplexHookExpiresAt(submittedRaw interface{}) (time.Time, bool) {
+	submittedAt, ok := fieldAsTime(submittedRaw)
+	if !ok {
+		return time.Time{}, false
+	}
+	return submittedAt.Add(getManualDuplexHookTTL()), true
+}
+
+func fieldAsTime(v interface{}) (time.Time, bool) {
+	switch val := v.(type) {
+	case float64:
+		return time.UnixMilli(int64(val)).In(time.Local), true
+	case int64:
+		return time.UnixMilli(val).In(time.Local), true
+	case int:
+		return time.UnixMilli(int64(val)).In(time.Local), true
+	case string:
+		s := strings.TrimSpace(val)
+		if s == "" {
+			return time.Time{}, false
+		}
+		if ms, err := strconv.ParseInt(s, 10, 64); err == nil {
+			return time.UnixMilli(ms).In(time.Local), true
+		}
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			return t.In(time.Local), true
+		}
+		if t, err := time.ParseInLocation("2006-01-02 15:04", s, time.Local); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func fieldAsBitableDateTime(v interface{}) string {

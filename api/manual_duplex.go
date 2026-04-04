@@ -233,6 +233,32 @@ func countPDFPages(sourcePath string) (int, error) {
 	return pdfapi.PageCountFile(sourcePath)
 }
 
+func chooseAutoDuplexSides(sourcePath string) (string, error) {
+	pageDims, err := pdfapi.PageDimsFile(sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read pdf page dimensions: %w", err)
+	}
+	if len(pageDims) == 0 {
+		return "", fmt.Errorf("pdf has no pages")
+	}
+
+	landscapeCount := 0
+	portraitCount := 0
+	for _, dim := range pageDims {
+		if dim.Width > dim.Height {
+			landscapeCount++
+		} else {
+			portraitCount++
+		}
+	}
+
+	if landscapeCount > portraitCount {
+		return "two-sided-short-edge", nil
+	}
+
+	return "two-sided-long-edge", nil
+}
+
 func prepareReversedPDF(sourcePath string) (string, error) {
 	totalPages, err := pdfapi.PageCountFile(sourcePath)
 	if err != nil {

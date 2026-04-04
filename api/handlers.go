@@ -322,6 +322,8 @@ func SubmitPrintJob(c *gin.Context) {
 			return
 		}
 
+		hookURL := fmt.Sprintf("/manual-duplex-hooks/%s/continue", token)
+
 		c.JSON(http.StatusCreated, gin.H{
 			"job_id":          initialJobID,
 			"printer":         printerID,
@@ -331,7 +333,7 @@ func SubmitPrintJob(c *gin.Context) {
 			"duplex":          true,
 			"note":            printerCfg.Note,
 			"message":         "First pass submitted. Use hook_url to print remaining pages.",
-			"hook_url":        fmt.Sprintf("/manual-duplex-hooks/%s/continue", token),
+			"hook_url":        hookURL,
 			"hook_expires_at": expiresAt.UTC().Format(time.RFC3339),
 		})
 
@@ -339,13 +341,14 @@ func SubmitPrintJob(c *gin.Context) {
 			cfg, cfgErr := requireConfig()
 			if cfgErr == nil {
 				persistPrintJobToBitable(c, cfg, printJobRecord{
-					JobID:     initialJobID,
-					PrinterID: printerID,
-					FileName:  file.Filename,
-					Status:    "pending_manual_continue",
-					Copies:    copies,
-					Duplex:    true,
-					User:      user,
+					JobID:      initialJobID,
+					PrinterID:  printerID,
+					FileName:   file.Filename,
+					Status:     "pending_manual_continue",
+					Copies:     copies,
+					Duplex:     true,
+					DuplexHook: hookURL,
+					User:       user,
 				})
 
 				// 将任务注册到后台轮询器
@@ -388,7 +391,13 @@ func SubmitPrintJob(c *gin.Context) {
 
 	printOpts := cups.PrintOptions{Copies: 1, Collate: collate}
 	if duplexMode == "auto" {
-		printOpts.Sides = "two-sided-long-edge"
+		autoSides, sideErr := chooseAutoDuplexSides(finalPrintPath)
+		if sideErr != nil {
+			log.Printf("[print] failed to detect document orientation, fallback to long-edge: %v", sideErr)
+			printOpts.Sides = "two-sided-long-edge"
+		} else {
+			printOpts.Sides = autoSides
+		}
 	}
 
 	jobID, err := cupsClient.SubmitJob(printerName, finalPrintPath, printOpts)

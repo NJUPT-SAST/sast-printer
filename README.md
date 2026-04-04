@@ -7,8 +7,8 @@ GoPrint 是一个基于 Golang 的打印后端服务，通过 CUPS/IPP 与系统
 - 打印机列表与详情查询
 - 打印任务提交（multipart 文件上传）
 - 手动双面打印（奇偶页拆分 + 二段式提交）
-- 打印任务列表、状态查询
-- 打印任务取消
+- 打印任务列表、状态查询（支持后台自动刷新到任务存储）
+- 删除任务记录（仅删除任务存储中的记录）
 - 状态细化返回（`status`、`reason`、`raw_state`）
 
 ## 技术栈
@@ -19,7 +19,7 @@ GoPrint 是一个基于 Golang 的打印后端服务，通过 CUPS/IPP 与系统
 ## 运行要求
 
 - Linux 系统并已安装/启用 CUPS
-- Go 1.21+
+- Go 1.24+
 - 当前进程用户对 CUPS 有查询/提交任务权限
 - 已提供并配置 `config.yaml`
 
@@ -37,7 +37,11 @@ go mod tidy
 go run main.go
 ```
 
-服务启动会读取项目根目录的 `config.yaml`。
+服务启动默认读取项目根目录的 `config.yaml`，也支持传入自定义路径：
+
+```bash
+go run main.go /path/to/config.yaml
+```
 
 3. 服务地址
 
@@ -60,7 +64,7 @@ go run main.go
 - `POST /api/jobs`：提交打印任务
 - `GET /api/jobs`：获取任务列表
 - `GET /api/jobs/:id`：获取任务详情/状态
-- `DELETE /api/jobs/:id`：取消任务
+- `DELETE /api/jobs/:id`：删除任务记录（不会向 CUPS 下发取消）
 
 ### 手动双面 Hook 接口
 
@@ -86,6 +90,7 @@ curl -sS -X POST http://localhost:5001/api/jobs \
 
 - `duplex=true|false`：是否启用双面打印（默认 `false`）
 - `copies=整数`：打印份数（默认 `1`）
+- `collate=true|false`：份数排列方式（默认 `true`）
 
 示例（双面 + 2 份）：
 
@@ -98,10 +103,9 @@ curl -sS -X POST "http://localhost:5001/api/jobs?duplex=true&copies=2" \
 ### 2.1) 提交手动双面任务
 
 ```bash
-curl -sS -X POST http://localhost:5001/api/jobs \
+curl -sS -X POST "http://localhost:5001/api/jobs?copies=1" \
     -F printer_id=sast-color-printer \
-    -F file=@printer_test_3.pdf \
-    -F copies=1
+    -F file=@printer_test.pdf
 ```
 
 若该打印机在 `config.yaml` 中配置 `duplex_mode: manual`，响应会返回 `hook_url`，用于第二轮打印。
@@ -118,11 +122,13 @@ curl -sS -X POST http://localhost:5001/api/manual-duplex-hooks/<token>/continue
 curl -sS http://localhost:5001/api/jobs/29
 ```
 
-### 4) 取消任务
+### 4) 删除任务记录
 
 ```bash
 curl -sS -X DELETE http://localhost:5001/api/jobs/29
 ```
+
+说明：该接口仅删除任务存储中的记录，不会取消打印机上的物理任务。
 
 ## 任务状态字段
 
@@ -134,7 +140,7 @@ curl -sS -X DELETE http://localhost:5001/api/jobs/29
 
 - 启用方式：为打印机配置 `duplex_mode: manual`
 - `duplex_mode: off`：关闭双面功能，按单轮正常打印
-- `duplex_mode: auto`：使用打印机原生双面（IPP `two-sided-long-edge`）
+- `duplex_mode: auto`：使用打印机原生双面，按文档方向自动选择：纵向=`two-sided-long-edge`，横向=`two-sided-short-edge`
 - `duplex_mode: manual`：执行手动双面（双轮提交 + hook）
 - 当请求 `duplex` 未传或为 `false` 时，默认单面打印 1 份
 - 当原始文件为 1 页时：无论配置为何，均按单轮打印（不启用双面）

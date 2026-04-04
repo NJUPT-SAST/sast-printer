@@ -44,6 +44,8 @@ func initJobStatusPoller(cfg *config.Config) *pendingJobTracker {
 			return
 		}
 		tracker.store = store
+		jobTracker = tracker
+		tracker.restorePendingJobs()
 
 		// 启动后台轮询 goroutine
 		go tracker.pollLoop()
@@ -70,9 +72,40 @@ func (t *pendingJobTracker) AddPendingJob(jobID, printerID string) {
 	log.Printf("[job-poller] tracked pending job job_id=%s printer=%s", jobID, printerID)
 }
 
+func (t *pendingJobTracker) restorePendingJobs() {
+	if t == nil || t.store == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	jobs, err := t.store.ListTrackableJobs(ctx)
+	if err != nil {
+		log.Printf("[job-poller] failed to restore pending jobs: %v", err)
+		return
+	}
+
+	if len(jobs) == 0 {
+		log.Printf("[job-poller] no pending jobs to restore")
+		return
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, j := range jobs {
+		t.jobs[j.JobID] = &trackedJob{
+			JobID:     j.JobID,
+			PrinterID: j.PrinterID,
+			LastCheck: time.Now(),
+		}
+	}
+	log.Printf("[job-poller] restored pending jobs count=%d", len(jobs))
+}
+
 // pollLoop 后台轮询循环，定期检查任务状态
 func (t *pendingJobTracker) pollLoop() {
-	ticker := time.NewTicker(5 * time.Second) // 每 5 秒检查一次
+	ticker := time.NewTicker(30 * time.Second) // 检查间隔
 	defer ticker.Stop()
 
 	for range ticker.C {
