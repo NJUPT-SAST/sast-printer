@@ -17,7 +17,7 @@ FROM scratch
 WORKDIR /app
 
 COPY --from=builder /out/goprint /app/goprint
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY public ./public
 
 EXPOSE 5001
