@@ -48,3 +48,5 @@ config.yaml
 # Python office converter artifacts
 office_converter/.venv/
 office_converter/output/
+office_converter/converted/
+office_converter/__pycache__/

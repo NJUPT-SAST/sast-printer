@@ -34,30 +34,99 @@ def parse_accepted_formats(raw: str) -> set[str]:
     return out
 
 
+def _unwrap_rpc_client(factory_result, kind: str):
+    if isinstance(factory_result, tuple):
+        if len(factory_result) >= 2:
+            ret_code, client = factory_result[0], factory_result[1]
+        elif len(factory_result) == 1:
+            ret_code, client = factory_result[0], None
+        else:
+            ret_code, client = -1, None
+        if ret_code not in (0, None):
+            raise RuntimeError(f"failed to create {kind} rpc client, ret_code={ret_code}")
+        if client is None:
+            raise RuntimeError(f"failed to create {kind} rpc client, client is None")
+        return client
+
+    return factory_result
+
+
+def _unwrap_wps_application(client, kind: str):
+    method_name = "getWpsApplication" if kind == "wps" else "getWppApplication"
+    getter = getattr(client, method_name, None)
+    if getter is None:
+        raise RuntimeError(f"rpc client does not expose {method_name}")
+
+    app_result = getter()
+    if isinstance(app_result, tuple):
+        if len(app_result) >= 2:
+            ret_code, app = app_result[0], app_result[1]
+        elif len(app_result) == 1:
+            ret_code, app = app_result[0], None
+        else:
+            ret_code, app = -1, None
+        if ret_code not in (0, None):
+            raise RuntimeError(f"failed to create {kind} application, ret_code={ret_code}")
+        if app is None:
+            raise RuntimeError(f"failed to create {kind} application, application is None")
+        return app
+
+    return app_result
+
+
+def _unwrap_rpc_result(result, action: str):
+    if isinstance(result, tuple):
+        if len(result) >= 2:
+            ret_code, payload = result[0], result[1]
+        elif len(result) == 1:
+            ret_code, payload = result[0], None
+        else:
+            ret_code, payload = -1, None
+        if ret_code not in (0, None):
+            raise RuntimeError(f"{action} failed, ret_code={ret_code}")
+        return payload
+
+    return result
+
+
 def _convert_word_to_pdf(source_path: str, output_path: str) -> None:
-    app = createWpsRpcInstance()
+    client = _unwrap_rpc_client(createWpsRpcInstance(), "wps")
+    app = _unwrap_wps_application(client, "wps")
     doc = None
     try:
         app.Visible = False
-        doc = app.Documents.Open(source_path)
-        doc.SaveAs(output_path, PDF_FORMAT_FOR_WPS)
+        doc = _unwrap_rpc_result(app.Documents.Open(source_path), "open wps document")
+        _unwrap_rpc_result(doc.SaveAs(output_path, PDF_FORMAT_FOR_WPS), "save wps document as pdf")
     finally:
         if doc is not None:
-            doc.Close(False)
-        app.Quit()
+            try:
+                _unwrap_rpc_result(doc.Close(False), "close wps document")
+            except Exception:
+                logging.exception("failed to close wps document")
+        try:
+            _unwrap_rpc_result(app.Quit(), "quit wps application")
+        except Exception:
+            logging.exception("failed to quit wps application")
 
 
 def _convert_ppt_to_pdf(source_path: str, output_path: str) -> None:
-    app = createWppRpcInstance()
+    client = _unwrap_rpc_client(createWppRpcInstance(), "wpp")
+    app = _unwrap_wps_application(client, "wpp")
     presentation = None
     try:
         app.Visible = False
-        presentation = app.Presentations.Open(source_path)
-        presentation.SaveAs(output_path, PDF_FORMAT_FOR_WPP)
+        presentation = _unwrap_rpc_result(app.Presentations.Open(source_path), "open wpp presentation")
+        _unwrap_rpc_result(presentation.SaveAs(output_path, PDF_FORMAT_FOR_WPP), "save wpp presentation as pdf")
     finally:
         if presentation is not None:
-            presentation.Close()
-        app.Quit()
+            try:
+                _unwrap_rpc_result(presentation.Close(), "close wpp presentation")
+            except Exception:
+                logging.exception("failed to close wpp presentation")
+        try:
+            _unwrap_rpc_result(app.Quit(), "quit wpp application")
+        except Exception:
+            logging.exception("failed to quit wpp application")
 
 
 def convert_to_pdf(source_path: str, output_dir: str, accepted_formats: set[str]) -> str:
