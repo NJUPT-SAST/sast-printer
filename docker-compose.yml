@@ -8,5 +8,27 @@ services:
     restart: always
     ports:
       - "5001:5001"
+    networks:
+      - goprint-net
     volumes:
       - ./config.yaml:/app/config.yaml:ro
+      - office-output:/tmp/office-output
+
+  office-converter:
+    build:
+      context: .
+      dockerfile: office_converter/Dockerfile
+    image: sast/sast-office-converter:current
+    container_name: sast-office-converter
+    restart: always
+    networks:
+      - goprint-net
+    volumes:
+      - office-output:/tmp/office-output
+
+volumes:
+  office-output:
+
+networks:
+  goprint-net:
+    driver: bridge

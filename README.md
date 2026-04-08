@@ -48,6 +48,37 @@ go run main.go /path/to/config.yaml
 - 默认端口：`5001`
 - Base URL：`http://localhost:5001`
 
+## Docker 分离部署（推荐）
+
+为减小主服务镜像体积，Office 转换服务已支持独立镜像部署。
+
+- `goprint`：Go 后端 API（5001）
+- `office-converter`：Python gRPC 转换服务（50061，容器内通信）
+
+两者通过 Docker 网络通信，地址由 `office_conversion.grpc_address` 指向 `office-converter:50061`。
+同时通过共享卷 `office-output` 交换转换后的 PDF 文件。
+
+1. 准备配置
+
+编辑项目根目录的 `config.yaml`，并确保：
+
+- `office_conversion.enabled: true`
+- `office_conversion.start_with_server: false`
+- `office_conversion.grpc_address: office-converter:50061`
+- `office_conversion.output_dir: /shared/office-output`
+
+2. 启动
+
+```bash
+docker compose up -d --build
+```
+
+3. 查看日志
+
+```bash
+docker compose logs -f goprint office-converter
+```
+
 ## API 概览
 
 ### 健康检查

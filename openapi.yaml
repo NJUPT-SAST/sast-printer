@@ -468,6 +468,61 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/jobs/preview:
+    post:
+      tags:
+        - 打印任务
+      summary: 转换文档并返回预览 PDF
+      description: |
+        上传文件后仅执行转换并返回 PDF 流用于前端预览，不提交打印任务。
+        支持 PDF 直出预览及 Office 文件转换后预览。
+      operationId: previewConvertedDocument
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: 要预览的文件（支持 pdf/doc/docx/ppt/pptx）
+      responses:
+        '200':
+          description: 预览转换成功，返回 PDF 二进制流
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: 请求参数错误或文件类型不支持
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 转换服务不可用或队列繁忙
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未授权（缺少或无效的飞书 user_access_token）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /api/jobs/{id}:
     get:
       tags:
