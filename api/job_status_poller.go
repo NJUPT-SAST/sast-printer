@@ -193,6 +193,10 @@ func (t *pendingJobTracker) removePendingJob(jobID string) {
 	}
 }
 
+func (t *pendingJobTracker) RemovePendingJob(jobID string) {
+	t.removePendingJob(jobID)
+}
+
 // GetPendingJobCount 获取正在跟踪的 pending 任务数
 func (t *pendingJobTracker) GetPendingJobCount() int {
 	if t == nil {

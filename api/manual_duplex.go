@@ -18,6 +18,7 @@ import (
 )
 
 type manualDuplexPending struct {
+	JobID             string
 	PrinterID         string
 	RemainingFilePath string
 	Copies            int
@@ -34,7 +35,7 @@ var manualDuplexStore = struct {
 	items: map[string]manualDuplexPending{},
 }
 
-func saveManualDuplexPending(printerID, remainingFilePath string, copies int) (string, time.Time, error) {
+func saveManualDuplexPending(jobID, printerID, remainingFilePath string, copies int) (string, time.Time, error) {
 	token, err := randomToken(16)
 	if err != nil {
 		return "", time.Time{}, err
@@ -47,6 +48,7 @@ func saveManualDuplexPending(printerID, remainingFilePath string, copies int) (s
 	manualDuplexStore.Lock()
 	defer manualDuplexStore.Unlock()
 	manualDuplexStore.items[token] = manualDuplexPending{
+		JobID:             jobID,
 		PrinterID:         printerID,
 		RemainingFilePath: remainingFilePath,
 		Copies:            copies,
