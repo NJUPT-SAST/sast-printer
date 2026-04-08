@@ -483,6 +483,72 @@ func SubmitPrintJob(c *gin.Context) {
 	}
 }
 
+// PreviewConvertedDocument 仅转换文档并返回 PDF 用于前端预览，不提交打印任务。
+func PreviewConvertedDocument(c *gin.Context) {
+	cfg, err := requireConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "file is required in multipart form field 'file'",
+		})
+		return
+	}
+
+	if !isSupportedUploadFile(cfg, file.Filename) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":      "unsupported file type, accepted formats are configured by office_conversion.accepted_formats plus pdf",
+			"error_code": "unsupported_file_type",
+		})
+		return
+	}
+
+	if err := acquirePrintSubmitQueue(c.Request.Context()); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":      "preview queue is busy or request cancelled",
+			"error_code": "preview_queue_unavailable",
+			"details":    err.Error(),
+		})
+		return
+	}
+	defer releasePrintSubmitQueue()
+
+	tempDir := os.TempDir()
+	tempPath := filepath.Join(tempDir, fmt.Sprintf("goprint-preview-%d-%s", os.Getpid(), filepath.Base(file.Filename)))
+	if err := c.SaveUploadedFile(file, tempPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "failed to save uploaded file",
+			"details": err.Error(),
+		})
+		return
+	}
+	defer os.Remove(tempPath)
+
+	previewPath := tempPath
+	if isOfficeConvertible(cfg, file.Filename) {
+		convertedPath, convErr := convertOfficeToPDF(c.Request.Context(), cfg, tempPath)
+		if convErr != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":      "failed to convert office file to pdf",
+				"error_code": "office_conversion_failed",
+				"details":    convErr.Error(),
+			})
+			return
+		}
+		defer os.Remove(convertedPath)
+		previewPath = convertedPath
+	}
+
+	previewName := strings.TrimSuffix(filepath.Base(file.Filename), filepath.Ext(file.Filename)) + ".pdf"
+	c.Header("Content-Type", "application/pdf")
+	c.Header("Content-Disposition", fmt.Sprintf("inline; filename=%q", previewName))
+	c.File(previewPath)
+}
+
 func ContinueManualDuplexPrint(c *gin.Context) {
 	token := c.Param("token")
 	pending, ok := getManualDuplexPending(token)

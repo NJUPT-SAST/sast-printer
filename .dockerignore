@@ -2,6 +2,13 @@
 .gitignore
 .vscode
 
+# Python venv/cache and runtime outputs
+office_converter/.venv
+office_converter/__pycache__
+office_converter/output
+**/__pycache__
+*.pyc
+
 *.pdf
 
 tmp

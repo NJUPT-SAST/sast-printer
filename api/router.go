@@ -38,10 +38,11 @@ func SetupRouter() *gin.Engine {
 	jobs := router.Group("/api/jobs")
 	jobs.Use(authMiddleware)
 	{
-		jobs.POST("", SubmitPrintJob)       // 提交打印任务
-		jobs.GET("", ListPrintJobs)         // 列出所有打印任务
-		jobs.GET("/:id", GetJobStatus)      // 获取任务状态
-		jobs.DELETE("/:id", CancelPrintJob) // 仅删除多维表任务记录
+		jobs.POST("", SubmitPrintJob)                   // 提交打印任务
+		jobs.POST("/preview", PreviewConvertedDocument) // 仅转换并预览文件
+		jobs.GET("", ListPrintJobs)                     // 列出所有打印任务
+		jobs.GET("/:id", GetJobStatus)                  // 获取任务状态
+		jobs.DELETE("/:id", CancelPrintJob)             // 仅删除多维表任务记录
 	}
 
 	// 手动双面打印相关接口
