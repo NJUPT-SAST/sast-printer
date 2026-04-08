@@ -352,7 +352,7 @@ func SubmitPrintJob(c *gin.Context) {
 			return
 		}
 
-		token, expiresAt, err := saveManualDuplexPending(printerID, secondPassToStore, 1)
+		token, expiresAt, err := saveManualDuplexPending(initialJobID, printerID, secondPassToStore, 1)
 		if err != nil {
 			_ = os.Remove(secondPassToStore)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -545,6 +545,31 @@ func CancelManualDuplexPrint(c *gin.Context) {
 			"error": "manual duplex hook not found or already used",
 		})
 		return
+	}
+
+	cfg, err := requireConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	store, err := newBitableJobStore(cfg)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":   "job store is not available",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	if pending.JobID != "" {
+		if err := store.UpdateJobStatus(context.Background(), pending.JobID, "cancelled"); err != nil {
+			log.Printf("[manual-duplex] failed to mark job cancelled in bitable job_id=%s err=%v", pending.JobID, err)
+		}
+	}
+
+	if tracker := initJobStatusPoller(cfg); tracker != nil && pending.JobID != "" {
+		tracker.RemovePendingJob(pending.JobID)
 	}
 
 	_ = os.Remove(pending.RemainingFilePath)
