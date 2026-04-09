@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG TZ=Asia/Shanghai
@@ -74,7 +74,7 @@ RUN apt-get update \
     libnss3 \
     libnspr4 \
     libgbm1 \
-    libasound2 \
+    libasound2t64 \
     libpulse0 \
     libcups2 \
     libglu1-mesa \
@@ -129,14 +129,14 @@ RUN rm -f /opt/kingsoft/wps-office/office6/libstdc++.so* \
 # Validate critical shared libs are available at build time.
 RUN python3 -c "import ctypes; ctypes.CDLL('libQt5Core.so.5'); ctypes.CDLL('libQt5Gui.so.5'); print('qt runtime ok')"
 
-COPY office_converter/requirements.txt ./requirements.txt
-RUN pip3 install --no-cache-dir -r requirements.txt
+COPY requirements.txt ./requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt --break-system-packages
 
-COPY office_converter/server.py ./server.py
-COPY office_converter/office_converter_pb2.py ./office_converter_pb2.py
-COPY office_converter/office_converter_pb2_grpc.py ./office_converter_pb2_grpc.py
-COPY office_converter/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-COPY office_converter/dummy.conf /etc/X11/dummy.conf
+COPY server.py ./server.py
+COPY office_converter_pb2.py ./office_converter_pb2.py
+COPY office_converter_pb2_grpc.py ./office_converter_pb2_grpc.py
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY dummy.conf /etc/X11/dummy.conf
 
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
