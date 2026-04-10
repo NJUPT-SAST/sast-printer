@@ -3,6 +3,9 @@ package api
 import (
 	"context"
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,9 +14,16 @@ import (
 	"goprint/api/pb"
 	"goprint/config"
 
+	"github.com/go-pdf/fpdf"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
+
+var supportedImageExt = map[string]bool{
+	".jpg":  true,
+	".jpeg": true,
+	".png":  true,
+}
 
 func fileExtLower(name string) string {
 	return strings.ToLower(filepath.Ext(strings.TrimSpace(name)))
@@ -38,7 +48,10 @@ func isSupportedUploadFile(cfg *config.Config, name string) bool {
 	if ext == ".pdf" {
 		return true
 	}
-	return acceptedOfficeExtMap(cfg)[ext]
+	if acceptedOfficeExtMap(cfg)[ext] {
+		return true
+	}
+	return supportedImageExt[ext]
 }
 
 func isOfficeConvertible(cfg *config.Config, name string) bool {
@@ -47,6 +60,79 @@ func isOfficeConvertible(cfg *config.Config, name string) bool {
 		return false
 	}
 	return acceptedOfficeExtMap(cfg)[ext]
+}
+
+func isImageConvertible(name string) bool {
+	return supportedImageExt[fileExtLower(name)]
+}
+
+func convertImageToPDF(cfg *config.Config, sourcePath string) (string, error) {
+	if err := os.MkdirAll(cfg.OfficeConversion.OutputDir, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create conversion output dir: %w", err)
+	}
+
+	f, err := os.Open(sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open image source: %w", err)
+	}
+	defer f.Close()
+
+	imgCfg, _, err := image.DecodeConfig(f)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode image metadata: %w", err)
+	}
+	if imgCfg.Width <= 0 || imgCfg.Height <= 0 {
+		return "", fmt.Errorf("invalid image dimensions")
+	}
+
+	orientation := "P"
+	pageW := 210.0
+	pageH := 297.0
+	if imgCfg.Width > imgCfg.Height {
+		orientation = "L"
+		pageW = 297.0
+		pageH = 210.0
+	}
+
+	pdf := fpdf.New(orientation, "mm", "A4", "")
+	pdf.AddPage()
+
+	imgW := float64(imgCfg.Width)
+	imgH := float64(imgCfg.Height)
+	maxW := pageW * 0.9
+	maxH := pageH * 0.9
+
+	drawW := maxW
+	drawH := drawW * (imgH / imgW)
+	if drawH > maxH {
+		drawH = maxH
+		drawW = drawH * (imgW / imgH)
+	}
+
+	x := (pageW - drawW) / 2
+	y := (pageH - drawH) / 2
+
+	imgType := strings.TrimPrefix(fileExtLower(sourcePath), ".")
+	if imgType == "jpg" {
+		imgType = "jpeg"
+	}
+
+	imgOpts := fpdf.ImageOptions{ImageType: imgType, ReadDpi: true}
+	pdf.ImageOptions(sourcePath, x, y, drawW, drawH, false, imgOpts, 0, "")
+
+	outFile, err := os.CreateTemp(cfg.OfficeConversion.OutputDir, "goprint-image-*.pdf")
+	if err != nil {
+		return "", fmt.Errorf("failed to create image pdf output file: %w", err)
+	}
+	outPath := outFile.Name()
+	_ = outFile.Close()
+
+	if err := pdf.OutputFileAndClose(outPath); err != nil {
+		_ = os.Remove(outPath)
+		return "", fmt.Errorf("failed to render image pdf: %w", err)
+	}
+
+	return outPath, nil
 }
 
 func convertOfficeToPDF(ctx context.Context, cfg *config.Config, sourcePath string) (string, error) {

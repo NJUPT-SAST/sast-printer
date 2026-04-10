@@ -1,5 +1,7 @@
 # GoPrint
 
+*Next-gen SAST Printer Utility*
+
 GoPrint 是一个基于 Golang 的打印后端服务，通过 CUPS/IPP 与系统打印服务通信，并提供 REST API 供前端调用。
 
 ## 特性
@@ -257,20 +259,3 @@ printers:
 - `printers[].rotate_second_pass`：二轮旋转 180 度（默认 `false`）
 - `printers[].note`：该打印机的说明文字
 
-## 项目结构
-
-```
-goprint/
-├── api/
-│   ├── handlers.go
-│   └── router.go
-├── config/
-│   └── config.go
-├── cups/
-│   ├── client.go
-│   └── models.go
-├── main.go
-├── go.mod
-├── go.sum
-└── README.md
-```

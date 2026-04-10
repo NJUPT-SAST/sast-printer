@@ -38,16 +38,17 @@ func SetupRouter() *gin.Engine {
 	jobs := router.Group("/api/jobs")
 	jobs.Use(authMiddleware)
 	{
-		jobs.POST("", SubmitPrintJob)                   // 提交打印任务
-		jobs.POST("/preview", PreviewConvertedDocument) // 仅转换并预览文件
-		jobs.GET("", ListPrintJobs)                     // 列出所有打印任务
-		jobs.GET("/:id", GetJobStatus)                  // 获取任务状态
-		jobs.DELETE("/:id", CancelPrintJob)             // 仅删除多维表任务记录
+		jobs.POST("", SubmitPrintJob)                                // 提交打印任务
+		jobs.POST("/preview", PreviewConvertedDocument)              // 仅转换并预览文件
+		jobs.GET("/supported-file-types", GetSupportedFileTypes)     // 获取当前支持上传的文件类型
+		jobs.GET("", ListPrintJobs)                                  // 列出所有打印任务
+		jobs.GET("/:id", GetJobStatus)                               // 获取任务状态
+		jobs.DELETE("/:id", CancelPrintJob)                          // 仅删除多维表任务记录
 	}
 
 	// 手动双面打印相关接口
 	manualDuplex := router.Group("/api/manual-duplex-hooks")
-	manualDuplex.Use(authMiddleware)
+	// manualDuplex.Use(authMiddleware)
 	{
 		manualDuplex.POST("/:token/continue", ContinueManualDuplexPrint) // 继续手动双面打印
 		manualDuplex.POST("/:token/cancel", CancelManualDuplexPrint)     // 取消手动双面打印

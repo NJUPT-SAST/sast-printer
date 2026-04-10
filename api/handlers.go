@@ -2,12 +2,15 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -66,7 +69,7 @@ func applyCopiesMode(sourcePath string, copies int, collate bool) (string, error
 }
 
 func uploadWorkDir(cfg *config.Config, filename string) string {
-	if cfg != nil && cfg.OfficeConversion.Enabled && isOfficeConvertible(cfg, filename) {
+	if cfg != nil && (isOfficeConvertible(cfg, filename) || isImageConvertible(filename)) {
 		dir := strings.TrimSpace(cfg.OfficeConversion.OutputDir)
 		if dir != "" {
 			return dir
@@ -97,6 +100,102 @@ func saveUploadedToDir(c *gin.Context, file *multipart.FileHeader, dir, prefix s
 	}
 
 	return tempPath, nil
+}
+
+func fileSHA256(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:]), nil
+}
+
+func officeSourceCachePath(cfg *config.Config, filename, hash string) string {
+	ext := filepath.Ext(strings.TrimSpace(filename))
+	return filepath.Join(cfg.OfficeConversion.OutputDir, "cache", "source", hash+strings.ToLower(ext))
+}
+
+func officePDFCachePath(cfg *config.Config, hash string) string {
+	return filepath.Join(cfg.OfficeConversion.OutputDir, "cache", "pdf", hash+".pdf")
+}
+
+func prepareUploadedSource(c *gin.Context, cfg *config.Config, file *multipart.FileHeader, prefix string) (string, func(), string, error) {
+	tempPath, err := saveUploadedToDir(c, file, uploadWorkDir(cfg, file.Filename), prefix)
+	if err != nil {
+		return "", nil, "", err
+	}
+
+	cleanup := func() {
+		_ = os.Remove(tempPath)
+	}
+
+	if !(isOfficeConvertible(cfg, file.Filename) || isImageConvertible(file.Filename)) {
+		return tempPath, cleanup, "", nil
+	}
+
+	hash, err := fileSHA256(tempPath)
+	if err != nil {
+		cleanup()
+		return "", nil, "", fmt.Errorf("failed to hash uploaded source file: %w", err)
+	}
+
+	sourceCachePath := officeSourceCachePath(cfg, file.Filename, hash)
+	if err := os.MkdirAll(filepath.Dir(sourceCachePath), 0o755); err != nil {
+		cleanup()
+		return "", nil, "", fmt.Errorf("failed to create source cache dir: %w", err)
+	}
+
+	if _, statErr := os.Stat(sourceCachePath); statErr == nil {
+		cleanup()
+	} else if os.IsNotExist(statErr) {
+		if err := os.Rename(tempPath, sourceCachePath); err != nil {
+			cleanup()
+			return "", nil, "", fmt.Errorf("failed to persist uploaded source: %w", err)
+		}
+	} else {
+		cleanup()
+		return "", nil, "", fmt.Errorf("failed to check source cache: %w", statErr)
+	}
+
+	return sourceCachePath, func() {}, hash, nil
+}
+
+func ensureCachedConvertedPDF(ctx context.Context, cfg *config.Config, sourcePath, sourceHash string) (string, error) {
+	cachedPDFPath := officePDFCachePath(cfg, sourceHash)
+	if info, err := os.Stat(cachedPDFPath); err == nil && !info.IsDir() {
+		return cachedPDFPath, nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("failed to inspect cached pdf: %w", err)
+	}
+
+	convertedPath := ""
+	var err error
+
+	if isOfficeConvertible(cfg, sourcePath) {
+		convertedPath, err = convertOfficeToPDF(ctx, cfg, sourcePath)
+		if err != nil {
+			return "", err
+		}
+	} else if isImageConvertible(sourcePath) {
+		convertedPath, err = convertImageToPDF(cfg, sourcePath)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		return "", fmt.Errorf("source file type is not convertible to pdf")
+	}
+
+	if err := os.MkdirAll(filepath.Dir(cachedPDFPath), 0o755); err != nil {
+		_ = os.Remove(convertedPath)
+		return "", fmt.Errorf("failed to create pdf cache dir: %w", err)
+	}
+	if err := os.Rename(convertedPath, cachedPDFPath); err != nil {
+		_ = os.Remove(convertedPath)
+		return "", fmt.Errorf("failed to persist converted pdf: %w", err)
+	}
+
+	return cachedPDFPath, nil
 }
 
 // ListPrinters 列出所有可用打印机
@@ -195,6 +294,52 @@ func GetPrinterInfo(c *gin.Context) {
 	})
 }
 
+// GetSupportedFileTypes 返回当前支持上传/转换的文件扩展名（不带点），始终包含 pdf。
+func GetSupportedFileTypes(c *gin.Context) {
+	cfg, err := requireConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	seen := map[string]struct{}{"pdf": {}}
+	fileTypes := []string{"pdf"}
+
+	for ext := range acceptedOfficeExtMap(cfg) {
+		normalized := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(ext)), ".")
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		fileTypes = append(fileTypes, normalized)
+	}
+
+	for ext := range supportedImageExt {
+		normalized := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(ext)), ".")
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		fileTypes = append(fileTypes, normalized)
+	}
+
+	if len(fileTypes) > 1 {
+		sort.Strings(fileTypes[1:])
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"supported_file_types":      fileTypes,
+		"count":                     len(fileTypes),
+		"office_conversion_enabled": cfg.OfficeConversion.Enabled,
+	})
+}
+
 // SubmitPrintJob 提交打印任务
 func SubmitPrintJob(c *gin.Context) {
 	printerID := c.PostForm("printer_id")
@@ -263,7 +408,7 @@ func SubmitPrintJob(c *gin.Context) {
 
 	if !isSupportedUploadFile(cfg, file.Filename) {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error":      "unsupported file type, accepted formats are configured by office_conversion.accepted_formats plus pdf",
+			"error":      "unsupported file type, accepted formats are office_conversion.accepted_formats plus pdf/jpg/jpeg/png",
 			"error_code": "unsupported_file_type",
 		})
 		return
@@ -279,7 +424,7 @@ func SubmitPrintJob(c *gin.Context) {
 	}
 	defer releasePrintSubmitQueue()
 
-	tempPath, err := saveUploadedToDir(c, file, uploadWorkDir(cfg, file.Filename), "goprint")
+	tempPath, cleanupUploaded, sourceHash, err := prepareUploadedSource(c, cfg, file, "goprint")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "failed to save uploaded file",
@@ -287,21 +432,20 @@ func SubmitPrintJob(c *gin.Context) {
 		})
 		return
 	}
-	defer os.Remove(tempPath)
+	defer cleanupUploaded()
 
 	printSourcePath := tempPath
 	convertedPath := ""
-	if isOfficeConvertible(cfg, file.Filename) {
-		convertedPath, err = convertOfficeToPDF(c.Request.Context(), cfg, tempPath)
+	if isOfficeConvertible(cfg, file.Filename) || isImageConvertible(file.Filename) {
+		convertedPath, err = ensureCachedConvertedPDF(c.Request.Context(), cfg, tempPath, sourceHash)
 		if err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"error":      "failed to convert office file to pdf",
-				"error_code": "office_conversion_failed",
+				"error":      "failed to convert source file to pdf",
+				"error_code": "file_conversion_failed",
 				"details":    err.Error(),
 			})
 			return
 		}
-		defer os.Remove(convertedPath)
 		printSourcePath = convertedPath
 	}
 
@@ -535,7 +679,7 @@ func PreviewConvertedDocument(c *gin.Context) {
 
 	if !isSupportedUploadFile(cfg, file.Filename) {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error":      "unsupported file type, accepted formats are configured by office_conversion.accepted_formats plus pdf",
+			"error":      "unsupported file type, accepted formats are office_conversion.accepted_formats plus pdf/jpg/jpeg/png",
 			"error_code": "unsupported_file_type",
 		})
 		return
@@ -551,7 +695,7 @@ func PreviewConvertedDocument(c *gin.Context) {
 	}
 	defer releasePrintSubmitQueue()
 
-	tempPath, err := saveUploadedToDir(c, file, uploadWorkDir(cfg, file.Filename), "goprint-preview")
+	tempPath, cleanupUploaded, sourceHash, err := prepareUploadedSource(c, cfg, file, "goprint-preview")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "failed to save uploaded file",
@@ -559,20 +703,19 @@ func PreviewConvertedDocument(c *gin.Context) {
 		})
 		return
 	}
-	defer os.Remove(tempPath)
+	defer cleanupUploaded()
 
 	previewPath := tempPath
-	if isOfficeConvertible(cfg, file.Filename) {
-		convertedPath, convErr := convertOfficeToPDF(c.Request.Context(), cfg, tempPath)
+	if isOfficeConvertible(cfg, file.Filename) || isImageConvertible(file.Filename) {
+		convertedPath, convErr := ensureCachedConvertedPDF(c.Request.Context(), cfg, tempPath, sourceHash)
 		if convErr != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"error":      "failed to convert office file to pdf",
-				"error_code": "office_conversion_failed",
+				"error":      "failed to convert source file to pdf",
+				"error_code": "file_conversion_failed",
 				"details":    convErr.Error(),
 			})
 			return
 		}
-		defer os.Remove(convertedPath)
 		previewPath = convertedPath
 	}
 
