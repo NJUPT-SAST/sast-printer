@@ -50,3 +50,4 @@ office_converter/.venv/
 office_converter/output/
 office_converter/converted/
 office_converter/__pycache__/
+office_converter/assets/
