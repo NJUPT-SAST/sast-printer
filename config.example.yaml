@@ -58,7 +58,7 @@ office_conversion:
   # Timeout for each conversion RPC call.
   request_timeout: 60s
   # Shared converted-file path. Go reads converted PDF from here.
-  output_dir: office_converter/output
+  output_dir: /tmp/office-output
 
 printers:
   # Example 1: visible in frontend printer list

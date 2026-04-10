@@ -65,7 +65,7 @@ go run main.go /path/to/config.yaml
 - `office_conversion.enabled: true`
 - `office_conversion.start_with_server: false`
 - `office_conversion.grpc_address: office-converter:50061`
-- `office_conversion.output_dir: /shared/office-output`
+- `office_conversion.output_dir: /tmp/office-output`
 
 2. 启动
 

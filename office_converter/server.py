@@ -200,7 +200,7 @@ class OfficeConverterService(office_converter_pb2_grpc.OfficeConverterServiceSer
 def main() -> None:
     parser = argparse.ArgumentParser(description="Office to PDF gRPC converter")
     parser.add_argument("--listen", default="127.0.0.1:50061", help="gRPC listen address")
-    parser.add_argument("--output-dir", default="office_converter/output", help="converted file output directory")
+    parser.add_argument("--output-dir", default="/tmp/office-output", help="converted file output directory")
     parser.add_argument("--max-workers", type=int, default=1, help="grpc worker count, keep 1 for serial processing")
     parser.add_argument("--accepted-formats", default="doc,docx,ppt,pptx", help="accepted source formats, comma separated")
     args = parser.parse_args()
