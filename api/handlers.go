@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -62,6 +63,40 @@ func applyCopiesMode(sourcePath string, copies int, collate bool) (string, error
 	}
 
 	return ApplyUncollatedCopies(sourcePath, copies)
+}
+
+func uploadWorkDir(cfg *config.Config, filename string) string {
+	if cfg != nil && cfg.OfficeConversion.Enabled && isOfficeConvertible(cfg, filename) {
+		dir := strings.TrimSpace(cfg.OfficeConversion.OutputDir)
+		if dir != "" {
+			return dir
+		}
+	}
+	return os.TempDir()
+}
+
+func saveUploadedToDir(c *gin.Context, file *multipart.FileHeader, dir, prefix string) (string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create upload temp dir: %w", err)
+	}
+
+	ext := filepath.Ext(file.Filename)
+	tmpFile, err := os.CreateTemp(dir, prefix+"-*"+ext)
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tempPath := tmpFile.Name()
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return "", fmt.Errorf("failed to close temp file: %w", err)
+	}
+
+	if err := c.SaveUploadedFile(file, tempPath); err != nil {
+		_ = os.Remove(tempPath)
+		return "", err
+	}
+
+	return tempPath, nil
 }
 
 // ListPrinters 列出所有可用打印机
@@ -244,9 +279,8 @@ func SubmitPrintJob(c *gin.Context) {
 	}
 	defer releasePrintSubmitQueue()
 
-	tempDir := os.TempDir()
-	tempPath := filepath.Join(tempDir, fmt.Sprintf("goprint-%d-%s", os.Getpid(), filepath.Base(file.Filename)))
-	if err := c.SaveUploadedFile(file, tempPath); err != nil {
+	tempPath, err := saveUploadedToDir(c, file, uploadWorkDir(cfg, file.Filename), "goprint")
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "failed to save uploaded file",
 			"details": err.Error(),
@@ -517,9 +551,8 @@ func PreviewConvertedDocument(c *gin.Context) {
 	}
 	defer releasePrintSubmitQueue()
 
-	tempDir := os.TempDir()
-	tempPath := filepath.Join(tempDir, fmt.Sprintf("goprint-preview-%d-%s", os.Getpid(), filepath.Base(file.Filename)))
-	if err := c.SaveUploadedFile(file, tempPath); err != nil {
+	tempPath, err := saveUploadedToDir(c, file, uploadWorkDir(cfg, file.Filename), "goprint-preview")
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "failed to save uploaded file",
 			"details": err.Error(),

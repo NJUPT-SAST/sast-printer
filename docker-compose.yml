@@ -10,6 +10,14 @@ services:
       - "5001:5001"
     networks:
       - goprint-net
+    # Add these because my environment sucks. Just hacky stuff
+    environment:
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      NO_PROXY: "127.0.0.1,localhost,office-converter,goprint"
+      no_proxy: "127.0.0.1,localhost,office-converter,goprint"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - office-output:/tmp/office-output
@@ -20,9 +28,27 @@ services:
       dockerfile: office_converter/Dockerfile
     image: sast/sast-office-converter:current
     container_name: sast-office-converter
+    command:
+      - python3
+      - server.py
+      - --listen
+      - 0.0.0.0:50061
+      - --output-dir
+      - /tmp/office-output
+      - --max-workers
+      - "1"
+      - --accepted-formats
+      - doc,docx,ppt,pptx
     restart: always
     networks:
       - goprint-net
+    environment:
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      NO_PROXY: "127.0.0.1,localhost,office-converter,goprint"
+      no_proxy: "127.0.0.1,localhost,office-converter,goprint"
     volumes:
       - office-output:/tmp/office-output
 
