@@ -392,6 +392,8 @@ func SubmitPrintJob(c *gin.Context) {
 		}
 	}
 
+	pages := strings.TrimSpace(c.Query("pages"))
+
 	file, err := c.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -605,6 +607,26 @@ func SubmitPrintJob(c *gin.Context) {
 	}
 	if finalPrintPath != printPath {
 		defer os.Remove(finalPrintPath)
+	}
+
+	// 如果指定了页码，提取指定页面
+	if pages != "" {
+		pagesExtractedPath, cleanupPages, err := extractPDFPages(finalPrintPath, pages)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "failed to extract specified pages",
+				"details": err.Error(),
+			})
+			return
+		}
+		// 如果提取后的路径不同，需要清理原来的 finalPrintPath 并使用新的
+		if pagesExtractedPath != finalPrintPath {
+			if finalPrintPath != printPath {
+				_ = os.Remove(finalPrintPath)
+			}
+			finalPrintPath = pagesExtractedPath
+			defer cleanupPages()
+		}
 	}
 
 	printOpts := cups.PrintOptions{Copies: 1, Collate: collate}

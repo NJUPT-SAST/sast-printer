@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -494,4 +495,138 @@ func sanitizeLabel(s string) string {
 		b.WriteRune('_')
 	}
 	return strings.Trim(b.String(), "_")
+}
+
+// extractPDF Pages 从 PDF 中提取指定页码的页面。
+// pagesStr 格式支持："1,2,3" 或 "1-3,5,7-9" 等。
+// 返回提取后 PDF 的文件路径，和一个清理函数。
+// 调用者需要负责调用清理函数来删除临时文件。
+func extractPDFPages(sourcePath string, pagesStr string) (string, func(), error) {
+	if strings.TrimSpace(pagesStr) == "" {
+		return sourcePath, func() {}, nil
+	}
+
+	totalPages, err := pdfapi.PageCountFile(sourcePath)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to count pdf pages: %w", err)
+	}
+	if totalPages <= 0 {
+		return "", nil, fmt.Errorf("invalid pdf page count: %d", totalPages)
+	}
+
+	// 解析页码，构建 selector 列表
+	selectors, err := parsePagesString(pagesStr, totalPages)
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid pages format: %w", err)
+	}
+
+	if len(selectors) == 0 {
+		return "", nil, fmt.Errorf("no valid pages specified")
+	}
+
+	// 创建临时文件存储提取后的 PDF
+	tmpFile, err := os.CreateTemp("", "goprint-pages-*.pdf")
+	if err != nil {
+		return "", nil, err
+	}
+	outPath := tmpFile.Name()
+	_ = tmpFile.Close()
+
+	// 使用 buildOrderedPDF 提取页面
+	if err := buildOrderedPDF(sourcePath, outPath, selectors); err != nil {
+		_ = os.Remove(outPath)
+		return "", nil, fmt.Errorf("failed to extract pages: %w", err)
+	}
+
+	cleanup := func() {
+		_ = os.Remove(outPath)
+	}
+
+	return outPath, cleanup, nil
+}
+
+// parsePagesString 解析页码字符串
+// 支持格式:
+//   - "1,2,3" -> 页码 1, 2, 3
+//   - "1-3" -> 页码 1, 2, 3
+//   - "1-3,5,7-9" -> 页码 1, 2, 3, 5, 7, 8, 9
+//   - 返回的是 pdfcpu selector 列表
+func parsePagesString(pagesStr string, totalPages int) ([]string, error) {
+	pagesStr = strings.TrimSpace(pagesStr)
+	if pagesStr == "" {
+		return []string{}, nil
+	}
+
+	pageMap := make(map[int]bool)
+	parts := strings.Split(pagesStr, ",")
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		// 检查是否是范围 (e.g., "1-3")
+		if strings.Contains(part, "-") {
+			rangeParts := strings.Split(part, "-")
+			if len(rangeParts) != 2 {
+				return nil, fmt.Errorf("invalid range format: %s", part)
+			}
+
+			start, err := strconv.Atoi(strings.TrimSpace(rangeParts[0]))
+			if err != nil {
+				return nil, fmt.Errorf("invalid start page: %s", rangeParts[0])
+			}
+
+			end, err := strconv.Atoi(strings.TrimSpace(rangeParts[1]))
+			if err != nil {
+				return nil, fmt.Errorf("invalid end page: %s", rangeParts[1])
+			}
+
+			if start > end {
+				start, end = end, start
+			}
+
+			if start < 1 {
+				start = 1
+			}
+			if end > totalPages {
+				end = totalPages
+			}
+
+			for i := start; i <= end; i++ {
+				pageMap[i] = true
+			}
+		} else {
+			// 单个页码
+			page, err := strconv.Atoi(part)
+			if err != nil {
+				return nil, fmt.Errorf("invalid page number: %s", part)
+			}
+
+			if page < 1 || page > totalPages {
+				return nil, fmt.Errorf("page %d out of range (1-%d)", page, totalPages)
+			}
+
+			pageMap[page] = true
+		}
+	}
+
+	// 转为排序的 selector 列表
+	if len(pageMap) == 0 {
+		return nil, fmt.Errorf("no valid pages extracted from: %s", pagesStr)
+	}
+
+	pageNums := make([]int, 0, len(pageMap))
+	for page := range pageMap {
+		pageNums = append(pageNums, page)
+	}
+	sort.Ints(pageNums)
+
+	selectors := make([]string, 0, len(pageNums))
+	for _, page := range pageNums {
+		selectors = append(selectors, strconv.Itoa(page))
+	}
+
+	return selectors, nil
 }
