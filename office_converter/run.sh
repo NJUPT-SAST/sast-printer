@@ -15,7 +15,7 @@ if [ "$#" -gt 0 ]; then
 else
   EXTRA_ARGS=(
     --listen "127.0.0.1:50061"
-    --output-dir "$ROOT_DIR/office_converter/output"
+    --output-dir "/tmp/office-output"
     --max-workers 1
     --accepted-formats "doc,docx,ppt,pptx"
   )

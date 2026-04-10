@@ -129,18 +129,18 @@ RUN rm -f /opt/kingsoft/wps-office/office6/libstdc++.so* \
 # Validate critical shared libs are available at build time.
 RUN python3 -c "import ctypes; ctypes.CDLL('libQt5Core.so.5'); ctypes.CDLL('libQt5Gui.so.5'); print('qt runtime ok')"
 
-COPY requirements.txt ./requirements.txt
+COPY office_converter/requirements.txt ./requirements.txt
 RUN pip3 install --no-cache-dir -r requirements.txt --break-system-packages
 
-COPY server.py ./server.py
-COPY office_converter_pb2.py ./office_converter_pb2.py
-COPY office_converter_pb2_grpc.py ./office_converter_pb2_grpc.py
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-COPY dummy.conf /etc/X11/dummy.conf
+COPY office_converter/server.py ./server.py
+COPY office_converter/office_converter_pb2.py ./office_converter_pb2.py
+COPY office_converter/office_converter_pb2_grpc.py ./office_converter_pb2_grpc.py
+COPY office_converter/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY office_converter/dummy.conf /etc/X11/dummy.conf
 
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 50061
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["python3", "server.py", "--listen", "0.0.0.0:50061", "--output-dir", "/shared/office-output", "--max-workers", "1", "--accepted-formats", "doc,docx,ppt,pptx"]
+CMD ["python3", "server.py", "--listen", "0.0.0.0:50061", "--output-dir", "/tmp/office-output", "--max-workers", "1", "--accepted-formats", "doc,docx,ppt,pptx"]

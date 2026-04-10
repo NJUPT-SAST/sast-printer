@@ -20,7 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("source_file", help="Office source file path (.doc/.docx/.ppt/.pptx)")
     parser.add_argument("--grpc-address", default="127.0.0.1:50061", help="gRPC server address")
     parser.add_argument("--timeout", type=int, default=120, help="gRPC timeout in seconds")
-    parser.add_argument("--expected-output-dir", default="office_converter/output", help="Expected PDF output directory")
+    parser.add_argument("--expected-output-dir", default="/tmp/office-output", help="Expected PDF output directory")
     parser.add_argument("--keep-output", action="store_true", help="Keep converted PDF after test")
     return parser
 

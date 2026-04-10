@@ -152,7 +152,7 @@ func applyDefaults(cfg *Config) {
 		cfg.OfficeConversion.RequestTimeout = "60s"
 	}
 	if cfg.OfficeConversion.OutputDir == "" {
-		cfg.OfficeConversion.OutputDir = "office_converter/output"
+		cfg.OfficeConversion.OutputDir = "/tmp/office-output"
 	}
 	if cfg.Auth.Feishu.UserInfoURL == "" {
 		cfg.Auth.Feishu.UserInfoURL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
