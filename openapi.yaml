@@ -370,6 +370,18 @@ paths:
             enum: [true, false, yes, no, '1', '0', on, off]
             default: "true"
           example: "true"
+        - name: pages
+          in: query
+          required: false
+          description: |
+            要打印的页码范围（仅对 PDF 和已转换的文件有效）。支持格式：
+            - "1,2,3" 打印第 1、2、3 页
+            - "1-3" 打印第 1 到 3 页
+            - "1-3,5,7-9" 打印第 1-3 页、第 5 页、第 7-9 页
+            页码从 1 开始计数。不指定时打印全部页码。
+          schema:
+            type: string
+          example: "1-5,10"
       requestBody:
         required: true
         content:
