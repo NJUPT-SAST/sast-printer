@@ -16,22 +16,15 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-RUN sed -i \
-    -e 's|http://archive.ubuntu.com/ubuntu|http://mirror.nju.edu.cn/ubuntu|g' \
-    -e 's|https://archive.ubuntu.com/ubuntu|https://mirror.nju.edu.cn/ubuntu|g' \
-    -e 's|http://security.ubuntu.com/ubuntu|http://mirror.nju.edu.cn/ubuntu|g' \
-    -e 's|https://security.ubuntu.com/ubuntu|https://mirror.nju.edu.cn/ubuntu|g' \
-    -e 's|http://ports.ubuntu.com/ubuntu-ports|http://mirror.nju.edu.cn/ubuntu-ports|g' \
-    -e 's|https://ports.ubuntu.com/ubuntu-ports|https://mirror.nju.edu.cn/ubuntu-ports|g' \
-    /etc/apt/sources.list
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-    ca-certificates \
+RUN apt update && \
+    apt install -y ca-certificates && \
+    sed -i \
+    -e 's|http://archive.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g' \
+    -e 's|http://security.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g' \
+    /etc/apt/sources.list.d/ubuntu.sources && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
     wget \
-    curl \
-    gnupg \
-    build-essential \
     python3 \
     python3-pip \
     python3-setuptools \
@@ -43,13 +36,6 @@ RUN apt-get update \
     dbus \
     dbus-x11 \
     fontconfig \
-    fonts-noto-cjk \
-    fonts-noto-cjk-extra \
-    fonts-noto-color-emoji \
-    fonts-wqy-zenhei \
-    fonts-wqy-microhei \
-    fonts-arphic-uming \
-    fonts-arphic-ukai \
     libx11-6 \
     libxext6 \
     libxrender1 \
@@ -118,22 +104,14 @@ RUN set -eux; \
     rm -f /tmp/wps.deb; \
     rm -rf /var/lib/apt/lists/*
 
-RUN chmod -x /opt/kingsoft/wps-office/office6/wpscloudsvr 2>/dev/null || true
-
-# Prefer system runtime libs for better compatibility with current base image.
-RUN rm -f /opt/kingsoft/wps-office/office6/libstdc++.so* \
+RUN chmod -x /opt/kingsoft/wps-office/office6/wpscloudsvr 2>/dev/null || true && \
+    rm -f /opt/kingsoft/wps-office/office6/libstdc++.so* \
     /opt/kingsoft/wps-office/office6/libjpeg.so* \
     /opt/kingsoft/wps-office/office6/libdbus-1.so* \
     && true
 
 # Validate critical shared libs are available at build time.
-RUN python3 -c "import ctypes; ctypes.CDLL('libQt5Core.so.5'); ctypes.CDLL('libQt5Gui.so.5'); print('qt runtime ok')"
-
-RUN mkdir -p /root/.config/Kingsoft
-
 COPY office_converter/requirements.txt ./requirements.txt
-RUN pip3 install --no-cache-dir -r requirements.txt --break-system-packages
-
 COPY office_converter/server.py ./server.py
 COPY office_converter/office_converter_pb2.py ./office_converter_pb2.py
 COPY office_converter/office_converter_pb2_grpc.py ./office_converter_pb2_grpc.py
@@ -142,9 +120,11 @@ COPY office_converter/dummy.conf /etc/X11/dummy.conf
 COPY office_converter/assets/Office.conf /root/.config/Kingsoft/Office.conf
 COPY office_converter/assets/fonts/ /usr/local/share/fonts/custom/
 
-RUN fc-cache -fv
-
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+RUN python3 -c "import ctypes; ctypes.CDLL('libQt5Core.so.5'); ctypes.CDLL('libQt5Gui.so.5'); print('qt runtime ok')" && \
+    mkdir -p /root/.config/Kingsoft && \
+    pip3 install --no-cache-dir -r requirements.txt --break-system-packages && \
+    fc-cache -fv && \
+    chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 50061
 
