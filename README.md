@@ -81,33 +81,15 @@ docker compose up -d --build
 docker compose logs -f goprint office-converter
 ```
 
-4. 必要手动干预步骤（生产环境建议）
+4. 字体与 WPS 配置
 
-字体文件不进入仓库，也不打包进镜像。请在容器启动后手动注入字体并刷新缓存。
+当前 `office-converter` 镜像构建流程已自动注入字体与 `Office.conf`。请将需要的字体放入 `office_converter/assets/fonts` 下，可用的配置文件放入 `office_converter/assets/Office.conf`。由于文件太大，仓库无法提供这些文件。
 
-- 准备字体目录（示例）：`~/Downloads/fonts`
-- 复制字体到转换容器：
-    ```
-    docker exec sast-office-converter sh -lc "mkdir -p /usr/local/share/fonts/custom"
-    docker cp ~/Downloads/fonts/. sast-office-converter:/usr/local/share/fonts/custom/
-    ```
-- 刷新字体缓存：
-    ```
-    docker exec sast-office-converter sh -lc "fc-cache -fv"
-    ```
-- 验证字体是否生效：
-    ```
-    docker exec sast-office-converter sh -lc "fc-list | wc -l"
-    ```
+如需排查转换环境，可执行以下可选检查命令：
 
-WPS 在部分环境首次运行需要 EULA 配置。若转换报错无法创建 WPS 应用实例，请注入可用的 Office.conf：
-
-- 准备注入文件：~/.config/Kingsoft/Office.conf
-- 注入命令：
-    podman exec sast-office-converter sh -lc "mkdir -p /root/.config/Kingsoft"
-    podman cp ~/.config/Kingsoft/Office.conf sast-office-converter:/root/.config/Kingsoft/Office.conf
-
-注意：每次重建或强制重建 office-converter 容器后，上述字体与 Office.conf 注入步骤都需要重新执行。
+```bash
+docker exec sast-office-converter sh -lc "fc-list | wc -l"
+```
 
 ## API 概览
 

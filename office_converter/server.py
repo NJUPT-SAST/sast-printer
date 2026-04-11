@@ -89,12 +89,19 @@ def _unwrap_rpc_result(result, action: str):
     return result
 
 
+def _set_app_visible_safely(app, kind: str) -> None:
+    try:
+        app.Visible = False
+    except Exception as exc:
+        logging.warning("failed to set %s app visible state, continue without hiding window: %s", kind, exc)
+
+
 def _convert_word_to_pdf(source_path: str, output_path: str) -> None:
     client = _unwrap_rpc_client(createWpsRpcInstance(), "wps")
     app = _unwrap_wps_application(client, "wps")
     doc = None
     try:
-        app.Visible = False
+        _set_app_visible_safely(app, "wps")
         doc = _unwrap_rpc_result(app.Documents.Open(source_path), "open wps document")
         _unwrap_rpc_result(doc.SaveAs(output_path, PDF_FORMAT_FOR_WPS), "save wps document as pdf")
     finally:
@@ -114,7 +121,7 @@ def _convert_ppt_to_pdf(source_path: str, output_path: str) -> None:
     app = _unwrap_wps_application(client, "wpp")
     presentation = None
     try:
-        app.Visible = False
+        _set_app_visible_safely(app, "wpp")
         presentation = _unwrap_rpc_result(app.Presentations.Open(source_path), "open wpp presentation")
         _unwrap_rpc_result(presentation.SaveAs(output_path, PDF_FORMAT_FOR_WPP), "save wpp presentation as pdf")
     finally:
