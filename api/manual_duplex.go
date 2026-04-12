@@ -587,11 +587,8 @@ func parsePagesString(pagesStr string, totalPages int) ([]string, error) {
 				start, end = end, start
 			}
 
-			if start < 1 {
-				start = 1
-			}
-			if end > totalPages {
-				end = totalPages
+			if start < 1 || end < 1 || start > totalPages || end > totalPages {
+				return nil, fmt.Errorf("page range %d-%d out of range (1-%d)", start, end, totalPages)
 			}
 
 			for i := start; i <= end; i++ {

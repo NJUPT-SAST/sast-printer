@@ -451,6 +451,21 @@ func SubmitPrintJob(c *gin.Context) {
 		printSourcePath = convertedPath
 	}
 
+	pageSelectionCleanup := func() {}
+	if pages != "" {
+		selectedPath, cleanupPages, err := extractPDFPages(printSourcePath, pages)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "failed to extract specified pages",
+				"details": err.Error(),
+			})
+			return
+		}
+		printSourcePath = selectedPath
+		pageSelectionCleanup = cleanupPages
+	}
+	defer pageSelectionCleanup()
+
 	printerCfg, err := resolvePrinter(printerID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "printer_id": printerID})
@@ -607,26 +622,6 @@ func SubmitPrintJob(c *gin.Context) {
 	}
 	if finalPrintPath != printPath {
 		defer os.Remove(finalPrintPath)
-	}
-
-	// 如果指定了页码，提取指定页面
-	if pages != "" {
-		pagesExtractedPath, cleanupPages, err := extractPDFPages(finalPrintPath, pages)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error":   "failed to extract specified pages",
-				"details": err.Error(),
-			})
-			return
-		}
-		// 如果提取后的路径不同，需要清理原来的 finalPrintPath 并使用新的
-		if pagesExtractedPath != finalPrintPath {
-			if finalPrintPath != printPath {
-				_ = os.Remove(finalPrintPath)
-			}
-			finalPrintPath = pagesExtractedPath
-			defer cleanupPages()
-		}
 	}
 
 	printOpts := cups.PrintOptions{Copies: 1, Collate: collate}
