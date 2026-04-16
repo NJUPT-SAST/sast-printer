@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"goprint/config"
 	"log"
@@ -43,6 +44,15 @@ var feishuTokenCache = struct {
 
 // AuthRequired 对除健康检查外的业务接口执行飞书 OAuth2 user_access_token 校验。
 func AuthRequired() gin.HandlerFunc {
+	return authRequired(false)
+}
+
+// SaneAPIAuthRequired 对 /sane-api 路径执行强制鉴权。
+func SaneAPIAuthRequired() gin.HandlerFunc {
+	return authRequired(true)
+}
+
+func authRequired(strict bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		method := c.Request.Method
@@ -60,8 +70,30 @@ func AuthRequired() gin.HandlerFunc {
 			return
 		}
 
-		if !cfg.Auth.Enabled {
+		if !strict && !cfg.Auth.Enabled {
 			log.Printf("[auth][middleware] skip auth (disabled) method=%s path=%s ip=%s", method, path, clientIP)
+			c.Next()
+			return
+		}
+
+		if strict {
+			if !cfg.SaneAPI.IsAuthEnabled() {
+				log.Printf("[auth][middleware] skip sane-api auth (disabled) method=%s path=%s ip=%s", method, path, clientIP)
+				c.Next()
+				return
+			}
+
+			if ok, err := verifySaneAPIToken(c, cfg); err != nil {
+				log.Printf("[auth][middleware] sane-api config error method=%s path=%s ip=%s err=%v", method, path, clientIP, err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				c.Abort()
+				return
+			} else if !ok {
+				log.Printf("[auth][middleware] sane-api reject method=%s path=%s ip=%s", method, path, clientIP)
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+				c.Abort()
+				return
+			}
 			c.Next()
 			return
 		}
@@ -98,6 +130,38 @@ func AuthRequired() gin.HandlerFunc {
 			method, path, clientIP, maskSensitive(token), maskSensitive(user.OpenID), time.Since(start))
 		c.Next()
 	}
+}
+
+func verifySaneAPIToken(c *gin.Context, cfg *config.Config) (bool, error) {
+	if strings.TrimSpace(cfg.SaneAPI.AuthToken) != "" {
+		headers := []string{
+			strings.TrimSpace(c.GetHeader(cfg.SaneAPI.AuthHeader)),
+			extractBearerToken(c.GetHeader("Authorization")),
+		}
+		for _, candidate := range headers {
+			if candidate == "" {
+				continue
+			}
+			if subtle.ConstantTimeCompare([]byte(candidate), []byte(cfg.SaneAPI.AuthToken)) == 1 {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	if cfg.Auth.Enabled {
+		token := extractBearerToken(c.GetHeader("Authorization"))
+		if token == "" {
+			return false, nil
+		}
+		_, err := validateFeishuToken(token, cfg)
+		if err != nil {
+			return false, nil
+		}
+		return true, nil
+	}
+
+	return false, fmt.Errorf("sane_api.auth_token is not configured and global auth is disabled")
 }
 
 func extractBearerToken(header string) string {

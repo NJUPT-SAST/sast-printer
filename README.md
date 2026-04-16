@@ -113,6 +113,18 @@ docker exec sast-office-converter sh -lc "fc-list | wc -l"
 
 - `POST /api/manual-duplex-hooks/:token/continue`：提交手动双面剩余页面
 
+### scanservjs 代理
+
+- `ANY /sane-api/*`：反向代理到 `sane_api.target_url`（默认 `http://192.168.101.37:8080`）
+- 代理会透传方法、查询参数、请求体和响应体（适用于 scanservjs 全部接口）
+- 路径映射规则：`/sane-api/<path>` -> `<target>/<path>`
+- 对上游返回的重定向 `Location` 会自动补全 `/sane-api` 前缀，避免跳回本地前端路由
+- 鉴权策略：
+    - `sane_api.auth_enabled: false` 时，直接代理（适用于可信内网）
+    - `sane_api.auth_enabled: true` 时，鉴权失败直接拒绝（`401`）
+    - 优先校验 `sane_api.auth_header` / `Authorization: Bearer` 是否匹配 `sane_api.auth_token`
+    - 若未配置 `sane_api.auth_token` 且 `auth.enabled: true`，则走全局飞书 Bearer 鉴权
+
 ## 示例请求
 
 ### 1) 打印机列表
@@ -173,6 +185,16 @@ curl -sS -X DELETE http://localhost:5001/api/jobs/29
 
 说明：该接口仅删除任务存储中的记录，不会取消打印机上的物理任务。
 
+### 5) 访问 scanservjs
+
+```bash
+curl -sS -H 'X-Sane-Api-Key: change_me' http://localhost:5001/sane-api/api-docs
+```
+
+等价于直接访问：`http://192.168.101.37:8080/api-docs`。
+
+如果你使用全局飞书鉴权，也可以在启用 `auth.enabled: true` 后，使用 `Authorization: Bearer ...` 调用该路由。
+
 ## 任务状态字段
 
 - `status`：归一化后的任务状态（如 `pending`、`processing`、`completed`、`cancelled`）
@@ -230,6 +252,10 @@ printers:
 
 - `printing.ipp_username`：IPP 请求用户名
 - `printing.manual_duplex_hook_ttl`：手动双面 hook 有效期（默认 `30m`）
+- `sane_api.target_url`：scanservjs 后端地址
+- `sane_api.auth_enabled`：是否启用 `/sane-api` 鉴权（默认 `true`）
+- `sane_api.auth_header`：共享密钥请求头名称（默认 `X-Sane-Api-Key`）
+- `sane_api.auth_token`：共享密钥；当 `auth_enabled: true` 时建议配置
 - `printers[].uri`：按打印机配置完整 URI（支持不同打印机在不同 CUPS 地址）
 - `printers[].visible`：是否在 `GET /api/printers` 中返回该打印机
 - `printers[].reverse`：单面打印时是否反向页序（双面模式忽略此字段）

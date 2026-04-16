@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 type Config struct {
 	Server           ServerConfig           `yaml:"server"`
 	Auth             AuthConfig             `yaml:"auth"`
+	SaneAPI          SaneAPIConfig          `yaml:"sane_api"`
 	JobStore         JobStoreConfig         `yaml:"job_store"`
 	Printing         PrintingConfig         `yaml:"printing"`
 	OfficeConversion OfficeConversionConfig `yaml:"office_conversion"`
@@ -31,6 +33,14 @@ type ServerConfig struct {
 type AuthConfig struct {
 	Enabled bool             `yaml:"enabled"`
 	Feishu  FeishuAuthConfig `yaml:"feishu"`
+}
+
+// SaneAPIConfig scanservjs 反向代理配置
+type SaneAPIConfig struct {
+	AuthEnabled *bool  `yaml:"auth_enabled"`
+	TargetURL   string `yaml:"target_url"`
+	AuthHeader  string `yaml:"auth_header"`
+	AuthToken   string `yaml:"auth_token"`
 }
 
 // FeishuAuthConfig 飞书 OAuth2 免登鉴权配置
@@ -169,6 +179,16 @@ func applyDefaults(cfg *Config) {
 	if cfg.Auth.Feishu.TokenCacheTTL == "" {
 		cfg.Auth.Feishu.TokenCacheTTL = "2m"
 	}
+	if cfg.SaneAPI.TargetURL == "" {
+		cfg.SaneAPI.TargetURL = "http://192.168.101.37:8080"
+	}
+	if cfg.SaneAPI.AuthEnabled == nil {
+		enabled := true
+		cfg.SaneAPI.AuthEnabled = &enabled
+	}
+	if cfg.SaneAPI.AuthHeader == "" {
+		cfg.SaneAPI.AuthHeader = "X-Sane-Api-Key"
+	}
 	if cfg.JobStore.Feishu.RequestTimeout == "" {
 		cfg.JobStore.Feishu.RequestTimeout = "3s"
 	}
@@ -246,6 +266,19 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 
+	if strings.TrimSpace(cfg.SaneAPI.TargetURL) == "" {
+		return fmt.Errorf("sane_api.target_url is required")
+	}
+	if _, err := url.ParseRequestURI(strings.TrimSpace(cfg.SaneAPI.TargetURL)); err != nil {
+		return fmt.Errorf("invalid sane_api.target_url: %w", err)
+	}
+	if cfg.SaneAPI.IsAuthEnabled() && strings.TrimSpace(cfg.SaneAPI.AuthHeader) == "" {
+		return fmt.Errorf("sane_api.auth_header is required")
+	}
+	if cfg.SaneAPI.IsAuthEnabled() && strings.TrimSpace(cfg.SaneAPI.AuthToken) == "" && !cfg.Auth.Enabled {
+		return fmt.Errorf("sane_api.auth_enabled=true requires sane_api.auth_token or auth.enabled=true")
+	}
+
 	if len(cfg.Printers) == 0 {
 		return fmt.Errorf("no printers configured")
 	}
@@ -318,6 +351,13 @@ func (p PrinterConfig) PadToEvenEnabled() bool {
 		return true
 	}
 	return *p.PadToEven
+}
+
+func (s SaneAPIConfig) IsAuthEnabled() bool {
+	if s.AuthEnabled == nil {
+		return true
+	}
+	return *s.AuthEnabled
 }
 
 func (c *Config) GetPrinterByID(id string) (PrinterConfig, bool) {

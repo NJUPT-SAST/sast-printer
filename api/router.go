@@ -46,6 +46,14 @@ func SetupRouter() *gin.Engine {
 		jobs.DELETE("/:id", CancelPrintJob)                          // 仅删除多维表任务记录
 	}
 
+	// scanservjs 代理接口
+	saneAPI := router.Group("/sane-api")
+	saneAPI.Use(SaneAPIAuthRequired())
+	{
+		saneAPI.Any("", SaneAPIProxy())
+		saneAPI.Any("/*path", SaneAPIProxy())
+	}
+
 	// 手动双面打印相关接口
 	manualDuplex := router.Group("/api/manual-duplex-hooks")
 	// manualDuplex.Use(authMiddleware)

@@ -27,6 +27,17 @@ auth:
     # In-memory cache TTL for validated bearer tokens.
     token_cache_ttl: 2m
 
+sane_api:
+  # Whether /sane-api requires authentication. Set false for trusted internal networks.
+  auth_enabled: true
+  # scanservjs upstream used by /sane-api.
+  target_url: http://192.168.101.37:8080
+  # Header checked by /sane-api auth middleware when auth_token is set.
+  auth_header: X-Sane-Api-Key
+  # Shared secret for /sane-api. Ignored when auth_enabled=false.
+  # Leave empty only if auth_enabled=true and you rely on global auth.enabled=true.
+  auth_token: change_me
+
 job_store:
   # Enable Bitable-backed print job storage and user-scoped query for /api/jobs.
   enabled: false

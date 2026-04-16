@@ -25,6 +25,8 @@ tags:
     description: 系统级接口
   - name: 飞书鉴权
     description: 飞书 OAuth2 免登录流程接口
+  - name: scanservjs 代理
+    description: 代理到 scanservjs 后端的透传接口
   - name: 打印机管理
     description: 打印机查询和信息接口
   - name: 打印任务
@@ -58,6 +60,167 @@ paths:
                   message:
                     type: string
                     example: "GoPrint is running."
+
+  /sane-api:
+    get:
+      tags:
+        - scanservjs 代理
+      summary: 代理 scanservjs 根路径（GET）
+      description: |
+        将 `GET /sane-api` 转发到 `GET {sane_api.target_url}/`。
+
+        实际代码对 `/sane-api/*` 支持所有常见 HTTP 方法（GET/POST/PUT/PATCH/DELETE/OPTIONS/HEAD）。
+        OpenAPI 仅以 GET/POST 两种形式展示代理模型。
+      operationId: proxySaneAPIRootGet
+      security:
+        - SaneApiKeyAuth: []
+        - FeishuBearerAuth: []
+        - {}
+      responses:
+        '200':
+          description: 上游成功响应（状态码和内容由 scanservjs 决定）
+          content:
+            '*/*':
+              schema:
+                type: string
+        '401':
+          description: 未授权（当 sane_api.auth_enabled=true 且鉴权失败）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: 上游不可达或代理错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    post:
+      tags:
+        - scanservjs 代理
+      summary: 代理 scanservjs 根路径（POST）
+      description: 将 `POST /sane-api` 转发到 `POST {sane_api.target_url}/`。
+      operationId: proxySaneAPIRootPost
+      security:
+        - SaneApiKeyAuth: []
+        - FeishuBearerAuth: []
+        - {}
+      requestBody:
+        required: false
+        content:
+          '*/*':
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: 上游成功响应（状态码和内容由 scanservjs 决定）
+          content:
+            '*/*':
+              schema:
+                type: string
+        '401':
+          description: 未授权（当 sane_api.auth_enabled=true 且鉴权失败）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: 上游不可达或代理错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /sane-api/{path}:
+    parameters:
+      - name: path
+        in: path
+        required: true
+        description: |
+          上游路径。
+          例如访问 `/sane-api/api-docs` 时，此值为 `api-docs`。
+
+          说明：OpenAPI 路径模板无法完整表达 Gin `/*path` 多级通配，
+          实际服务支持任意深度路径（如 `/sane-api/api/v1/context`）。
+        schema:
+          type: string
+          example: api-docs
+    get:
+      tags:
+        - scanservjs 代理
+      summary: 代理 scanservjs 子路径（GET）
+      description: |
+        将 `GET /sane-api/{path}` 转发到 `GET {sane_api.target_url}/{path}`。
+        上游返回的 `Location` 头会自动重写为 `/sane-api/...`，避免重定向丢前缀。
+      operationId: proxySaneAPIPathGet
+      security:
+        - SaneApiKeyAuth: []
+        - FeishuBearerAuth: []
+        - {}
+      responses:
+        '200':
+          description: 上游成功响应（状态码和内容由 scanservjs 决定）
+          content:
+            '*/*':
+              schema:
+                type: string
+        '301':
+          description: 上游重定向（Location 已重写为 /sane-api 前缀）
+        '302':
+          description: 上游重定向（Location 已重写为 /sane-api 前缀）
+        '304':
+          description: 资源未修改（缓存协商，来自上游）
+        '401':
+          description: 未授权（当 sane_api.auth_enabled=true 且鉴权失败）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: 上游不可达或代理错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    post:
+      tags:
+        - scanservjs 代理
+      summary: 代理 scanservjs 子路径（POST）
+      description: 将 `POST /sane-api/{path}` 转发到 `POST {sane_api.target_url}/{path}`。
+      operationId: proxySaneAPIPathPost
+      security:
+        - SaneApiKeyAuth: []
+        - FeishuBearerAuth: []
+        - {}
+      requestBody:
+        required: false
+        content:
+          '*/*':
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: 上游成功响应（状态码和内容由 scanservjs 决定）
+          content:
+            '*/*':
+              schema:
+                type: string
+        '401':
+          description: 未授权（当 sane_api.auth_enabled=true 且鉴权失败）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: 上游不可达或代理错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/auth/config:
     get:
@@ -382,6 +545,21 @@ paths:
           schema:
             type: string
           example: "1-5,10"
+        - name: nup
+          in: query
+          required: false
+          description: |
+            每版打印页数（N-up 布局）。支持值：
+            - 1：正常打印（默认，每页一份）
+            - 2：每版打印 2 页。根据文档方向自动调整输出方向：
+              - 纵向文档 → 横向输出排布
+              - 横向文档 → 纵向输出排布
+            - 4：每版打印 4 页。保持文档原始方向不变
+          schema:
+            type: integer
+            enum: [1, 2, 4]
+            default: 1
+          example: 2
       requestBody:
         required: true
         content:
@@ -803,6 +981,14 @@ components:
       description: |
         飞书 OAuth2 网页应用免登方案获取的 user_access_token。
         在请求头中传递：Authorization: Bearer <user_access_token>
+
+    SaneApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Sane-Api-Key
+      description: |
+        scanservjs 代理共享密钥请求头。
+        头名默认是 `X-Sane-Api-Key`，可通过 `sane_api.auth_header` 调整。
 
   schemas:
     ErrorResponse:
