@@ -31,16 +31,16 @@ func SaneAPIProxy() gin.HandlerFunc {
 			forwardPath = "/"
 		}
 
-		proxy := httputil.NewSingleHostReverseProxy(target)
-		origDirector := proxy.Director
-		proxy.Director = func(req *http.Request) {
-			origDirector(req)
-			req.URL.Path = forwardPath
-			req.URL.RawPath = ""
-			req.Host = target.Host
-			req.Header.Set("X-Forwarded-Host", c.Request.Host)
-			req.Header.Set("X-Forwarded-Proto", forwardedProto(c.Request))
-			req.Header.Set("X-Forwarded-Prefix", "/sane-api")
+		proxy := &httputil.ReverseProxy{}
+		proxy.Rewrite = func(proxyReq *httputil.ProxyRequest) {
+			proxyReq.SetURL(target)
+			proxyReq.Out.URL.Path = forwardPath
+			proxyReq.Out.URL.RawPath = ""
+			proxyReq.Out.Host = target.Host
+			proxyReq.SetXForwarded()
+			proxyReq.Out.Header.Set("X-Forwarded-Host", c.Request.Host)
+			proxyReq.Out.Header.Set("X-Forwarded-Proto", forwardedProto(c.Request))
+			proxyReq.Out.Header.Set("X-Forwarded-Prefix", "/sane-api")
 		}
 		proxy.ModifyResponse = func(resp *http.Response) error {
 			location := strings.TrimSpace(resp.Header.Get("Location"))
@@ -69,7 +69,16 @@ func SaneAPIProxy() gin.HandlerFunc {
 func rewriteProxyLocation(location string, target *url.URL) (string, bool) {
 	const prefix = "/sane-api"
 
+	if isUnsafeRedirectPathPrefix(location) {
+		return prefix + "/", true
+	}
+
 	if strings.HasPrefix(location, "/") {
+		suffix := strings.TrimPrefix(location, prefix)
+		if suffix != location && isUnsafeRedirectPathPrefix(suffix) {
+			return prefix + "/", true
+		}
+
 		if location == prefix || strings.HasPrefix(location, prefix+"/") {
 			return location, false
 		}
@@ -89,6 +98,9 @@ func rewriteProxyLocation(location string, target *url.URL) (string, bool) {
 	if path == "" {
 		path = "/"
 	}
+	if isUnsafeRedirectPathPrefix(path) {
+		path = "/"
+	}
 	if path != prefix && !strings.HasPrefix(path, prefix+"/") {
 		u.Path = prefix + path
 	}
@@ -96,6 +108,10 @@ func rewriteProxyLocation(location string, target *url.URL) (string, bool) {
 	u.Scheme = ""
 	u.Host = ""
 	return u.String(), true
+}
+
+func isUnsafeRedirectPathPrefix(path string) bool {
+	return strings.HasPrefix(path, "//") || strings.HasPrefix(path, "/\\")
 }
 
 func sameUpstream(u *url.URL, target *url.URL) bool {
