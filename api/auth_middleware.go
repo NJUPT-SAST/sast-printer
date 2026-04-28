@@ -126,6 +126,7 @@ func authRequired(strict bool) gin.HandlerFunc {
 
 		c.Set("auth_provider", "feishu")
 		c.Set("auth_user", user)
+		c.Set("auth_token", token)
 		log.Printf("[auth][middleware] auth success method=%s path=%s ip=%s token=%s open_id=%s cost=%s",
 			method, path, clientIP, maskSensitive(token), maskSensitive(user.OpenID), time.Since(start))
 		c.Next()

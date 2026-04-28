@@ -33,6 +33,8 @@ tags:
     description: 打印任务相关操作
   - name: 手动双面打印
     description: 手动双面打印工作流
+  - name: 飞书文档
+    description: 飞书文档/知识库导出并打印
 
 security:
   - FeishuBearerAuth: []
@@ -742,6 +744,123 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/jobs/preview/feishu:
+    post:
+      tags:
+        - 飞书文档
+      summary: 导出飞书文档并返回预览 PDF
+      description: |
+        输入一个飞书文档或知识库页面的 URL，系统自动导出为 PDF 并返回预览。
+
+        支持的 URL 格式：
+        - 文档：`https://xxx.feishu.cn/docx/TOKEN`
+        - 知识库页面：`https://xxx.feishu.cn/wiki/TOKEN`
+
+        知识库文档会先通过 wiki API 解析节点，获取底层 obj_token 后再导出。
+        内含快捷方式的节点会自动跟踪到目标实体。
+      operationId: previewFeishuDocument
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeishuExportRequest'
+      responses:
+        '200':
+          description: 导出并预览成功，返回 PDF 二进制流
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: 请求参数错误或 URL 格式不支持
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 导出服务不可用或队列繁忙
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未授权（缺少或无效的飞书 user_access_token）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/jobs/feishu:
+    post:
+      tags:
+        - 飞书文档
+      summary: 导出飞书文档并提交打印
+      description: |
+        输入一个飞书文档或知识库页面的 URL，系统自动导出为 PDF 并提交到指定打印机。
+
+        支持的 URL 格式：
+        - 文档：`https://xxx.feishu.cn/docx/TOKEN`
+        - 知识库页面：`https://xxx.feishu.cn/wiki/TOKEN`
+
+        导出完成后会经过与文件上传打印一致的后处理流程（页码范围、N-up 布局、份数、双面等），再提交到 CUPS。
+
+        前提条件：
+        - 飞书自建应用需拥有文档导出权限（`docs:doc:readonly`、`docx:document:readonly`、`drive:drive:readonly`）
+        - 导出知识库文档时应用须被添加为知识库管理员
+        - 应用需对目标文档有读权限
+      operationId: submitFeishuPrintJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeishuPrintJobRequest'
+      responses:
+        '201':
+          description: 导出成功并提交打印
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitPrintJobResponse'
+        '400':
+          description: 请求参数错误或验证失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 打印机不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 导出服务不可用、队列繁忙或 CUPS 不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未授权（缺少或无效的飞书 user_access_token）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /api/jobs/{id}:
     get:
       tags:
@@ -1238,3 +1357,71 @@ components:
         - supported_file_types
         - count
         - office_conversion_enabled
+
+    FeishuExportRequest:
+      type: object
+      description: 飞书文档导出/预览请求
+      properties:
+        url:
+          type: string
+          description: |
+            飞书文档或知识库页面的完整 URL。
+
+            支持的格式：
+            - https://xxx.feishu.cn/docx/xxx — DocX 文档
+            - https://xxx.feishu.cn/doc/xxx — 旧版文档
+            - https://xxx.feishu.cn/sheets/xxx — 电子表格
+            - https://xxx.feishu.cn/bitable/xxx — 多维表格
+            - https://xxx.feishu.cn/mindnotes/xxx — 思维笔记
+            - https://xxx.feishu.cn/wiki/xxx — 知识库页面（自动解析节点）
+          example: "https://sast.feishu.cn/docx/doxcnXXXXXXXXXXXX"
+      required:
+        - url
+
+    FeishuPrintJobRequest:
+      type: object
+      description: 飞书文档导出并打印请求
+      properties:
+        url:
+          type: string
+          description: |
+            飞书文档或知识库页面的完整 URL（同预览接口）。
+          example: "https://sast.feishu.cn/wiki/wikcnXXXXXXXXXXXX"
+        printer_id:
+          type: string
+          description: 目标打印机 ID
+          example: "sast-printer"
+        copies:
+          type: integer
+          description: 打印份数，默认 1
+          default: 1
+          minimum: 1
+          example: 2
+        duplex:
+          type: boolean
+          description: 是否启用双面打印（覆盖打印机默认配置）。仅当打印机 duplex_mode 不为 off 时生效
+          default: false
+          example: true
+        collate:
+          type: boolean
+          description: 份数排列方式。true=1,2,3,1,2,3；false=1,1,2,2,3,3
+          default: true
+          example: true
+        nup:
+          type: integer
+          description: 每版打印页数（1/2/4）
+          enum: [1, 2, 4]
+          default: 1
+          example: 1
+        pages:
+          type: string
+          description: |
+            要打印的页码范围。支持格式：
+            - "1,2,3" 打印第 1、2、3 页
+            - "1-3" 打印第 1 到 3 页
+            - "1-3,5,7-9" 混合范围
+            页码从 1 开始。不指定时打印全部。
+          example: "1-5,10"
+      required:
+        - url
+        - printer_id

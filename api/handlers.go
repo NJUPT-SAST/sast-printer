@@ -392,6 +392,18 @@ func SubmitPrintJob(c *gin.Context) {
 		}
 	}
 
+	nup := 1
+	if rawNup := strings.TrimSpace(c.Query("nup")); rawNup != "" {
+		parsedNup, err := strconv.Atoi(rawNup)
+		if err != nil || (parsedNup != 1 && parsedNup != 2 && parsedNup != 4) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "nup must be 1, 2, or 4",
+			})
+			return
+		}
+		nup = parsedNup
+	}
+
 	pages := strings.TrimSpace(c.Query("pages"))
 
 	file, err := c.FormFile("file")
@@ -465,6 +477,24 @@ func SubmitPrintJob(c *gin.Context) {
 		pageSelectionCleanup = cleanupPages
 	}
 	defer pageSelectionCleanup()
+
+	nupCleanup := func() {}
+	if nup > 1 {
+		nupPath, cleanupNup, err := applyNupLayout(printSourcePath, nup)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "failed to apply nup layout",
+				"details": err.Error(),
+			})
+			return
+		}
+		if nupPath != printSourcePath {
+			pageSelectionCleanup()
+			printSourcePath = nupPath
+			nupCleanup = cleanupNup
+		}
+	}
+	defer nupCleanup()
 
 	printerCfg, err := resolvePrinter(printerID)
 	if err != nil {

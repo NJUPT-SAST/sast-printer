@@ -11,6 +11,7 @@ GoPrint 是一个基于 Golang 的打印后端服务，通过 CUPS/IPP 与系统
 - 手动双面打印（奇偶页拆分 + 二段式提交）
 - 打印任务列表、状态查询（支持后台自动刷新到任务存储）
 - 删除任务记录（仅删除任务存储中的记录）
+- 飞书文档/知识库导出并打印（支持 wiki 节点自动解析、快捷方式跟踪）
 - 状态细化返回（`status`、`reason`、`raw_state`）
 
 ## 技术栈
@@ -105,9 +106,15 @@ docker exec sast-office-converter sh -lc "fc-list | wc -l"
 ### 任务接口
 
 - `POST /api/jobs`：提交打印任务
+- `POST /api/jobs/preview`：转换文件并返回预览 PDF
 - `GET /api/jobs`：获取任务列表
 - `GET /api/jobs/:id`：获取任务详情/状态
 - `DELETE /api/jobs/:id`：删除任务记录（不会向 CUPS 下发取消）
+
+### 飞书文档接口
+
+- `POST /api/jobs/preview/feishu`：导出飞书文档/知识库页面为 PDF 并返回预览
+- `POST /api/jobs/feishu`：导出飞书文档/知识库页面为 PDF 并提交打印
 
 ### 手动双面 Hook 接口
 
@@ -190,6 +197,57 @@ curl -sS -X DELETE http://localhost:5001/api/jobs/29
 ```bash
 curl -sS -H 'X-Sane-Api-Key: change_me' http://localhost:5001/sane-api/api-docs
 ```
+
+### 6) 导出飞书文档预览
+
+```bash
+curl -sS -X POST http://localhost:5001/api/jobs/preview/feishu \
+    -H 'Authorization: Bearer <user_access_token>' \
+    -H 'Content-Type: application/json' \
+    -d '{"url":"https://sast.feishu.cn/docx/doxcnXXXXXXXXXXXX"}' \
+    -o preview.pdf
+```
+
+### 7) 导出飞书文档并打印
+
+```bash
+curl -sS -X POST http://localhost:5001/api/jobs/feishu \
+    -H 'Authorization: Bearer <user_access_token>' \
+    -H 'Content-Type: application/json' \
+    -d '{
+        "url": "https://sast.feishu.cn/wiki/wikcnXXXXXXXXXXXX",
+        "printer_id": "sast-printer",
+        "copies": 1,
+        "duplex": false
+    }'
+```
+
+可选 JSON 参数：
+
+- `copies`：打印份数（默认 `1`）
+- `duplex`：是否启用双面打印（默认 `false`）
+- `collate`：份数排列方式（默认 `true`）
+- `nup`：每版打印页数（`1`/`2`/`4`，默认 `1`）
+- `pages`：页码范围（如 `"1-5,10"`）
+
+知识库文档打印示例：
+
+```bash
+curl -sS -X POST http://localhost:5001/api/jobs/feishu \
+    -H 'Authorization: Bearer <user_access_token>' \
+    -H 'Content-Type: application/json' \
+    -d '{
+        "url": "https://sast.feishu.cn/wiki/wikcnXXXXXXXXXXXX",
+        "printer_id": "sast-printer"
+    }'
+```
+
+飞书文档导出前提条件：
+
+- 自建应用需拥有以下权限：`docs:doc:readonly`、`docx:document:readonly`、`drive:drive:readonly`、`wiki:wiki:readonly`
+- 导出知识库文档时，应用须被添加为知识库管理员
+- 应用需对目标文档有读权限
+- 导出后的文件仅保留 10 分钟，系统会立即下载
 
 等价于直接访问：`http://192.168.101.37:8080/api-docs`。
 
