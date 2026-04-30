@@ -210,3 +210,27 @@ func GetAuthConfig(c *gin.Context) {
 		// "redirect_uri":  cfg.Auth.Feishu.RedirectURI,
 	})
 }
+
+// GetJSSDKConfig handles GET /api/auth/jssdk-config?url=xxx
+func GetJSSDKConfig(c *gin.Context) {
+	pageURL := c.Query("url")
+	if pageURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "url query parameter is required"})
+		return
+	}
+
+	cfg, err := requireConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	config, err := generateJSSDKConfig(c.Request.Context(), cfg, pageURL)
+	if err != nil {
+		log.Printf("[jssdk] config generation failed url=%s err=%v", pageURL, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate JSSDK config"})
+		return
+	}
+
+	c.JSON(http.StatusOK, config)
+}
