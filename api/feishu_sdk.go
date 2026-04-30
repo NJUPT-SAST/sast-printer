@@ -246,8 +246,10 @@ func generateJSSDKConfig(ctx context.Context, cfg *config.Config, pageURL string
 	nonceStr := randomString(16)
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 
+	verifyStr := fmt.Sprintf("jsapi_ticket=%s&noncestr=%s&timestamp=%s&url=%s",
+		ticket, nonceStr, timestamp, pageURL)
 	h := sha1.New()
-	h.Write([]byte(ticket + nonceStr + timestamp + pageURL))
+	h.Write([]byte(verifyStr))
 	signature := hex.EncodeToString(h.Sum(nil))
 
 	return map[string]string{
