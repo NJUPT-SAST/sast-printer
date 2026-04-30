@@ -482,7 +482,10 @@ func downloadBotFile(ctx context.Context, cfg *config.Config, messageID, fileKey
 		return "", "", nil, err
 	}
 
-	outPath := filepath.Join(workDir, sanitizeFilename(fileName))
+	outPath := filepath.Clean(filepath.Join(workDir, sanitizeFilename(fileName)))
+	if !strings.HasPrefix(outPath, filepath.Clean(workDir)+string(os.PathSeparator)) {
+		return "", "", nil, fmt.Errorf("path traversal attempt: %s", outPath)
+	}
 	f, err := os.Create(outPath)
 	if err != nil {
 		return "", "", nil, err
