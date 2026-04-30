@@ -486,13 +486,16 @@ func downloadBotFile(ctx context.Context, cfg *config.Config, messageID, fileKey
 		return "", "", nil, err
 	}
 
-	outPath := filepath.Join(absWorkDir, sanitizeFilename(fileName))
-	absOutPath, err := filepath.Abs(outPath)
+	safeName := sanitizeFilename(fileName)
+	if strings.Contains(safeName, string(os.PathSeparator)) || safeName == "." || safeName == ".." {
+		return "", "", nil, fmt.Errorf("invalid filename: %s", fileName)
+	}
+	absWorkDir, err := filepath.Abs(filepath.Clean(workDir))
 	if err != nil {
 		return "", "", nil, err
 	}
-	rel, err := filepath.Rel(absWorkDir, absOutPath)
-	if err != nil || rel == "." || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+	absOutPath := filepath.Clean(filepath.Join(absWorkDir, safeName))
+	if !strings.HasPrefix(absOutPath, absWorkDir+string(os.PathSeparator)) && absOutPath != absWorkDir {
 		return "", "", nil, fmt.Errorf("path traversal attempt: %s", absOutPath)
 	}
 
