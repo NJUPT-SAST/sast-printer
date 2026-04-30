@@ -3,7 +3,23 @@ name: CI/CD with Git Commit Hash Tag
 on:
   push:
     branches:
-      - main # 当代码推送到 main 分支时触发
+      - main
+    paths:
+      - 'api/**'
+      - 'cmd/**'
+      - 'config/**'
+      - 'cups/**'
+      - 'office_converter/**'
+      - 'proto/**'
+      - 'public/**'
+      - 'config.example.yaml'
+      - 'docker-compose.yml'
+      - 'Dockerfile'
+      - 'go.mod'
+      - 'Makefile'
+      - 'openapi.yaml'
+      - 'main.go'
+      - '.github/workflows/**'
 
 env:
   SERVICE_NAME: sast-goprint
