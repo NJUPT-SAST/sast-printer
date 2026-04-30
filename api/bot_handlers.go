@@ -481,36 +481,29 @@ func downloadBotFile(ctx context.Context, cfg *config.Config, messageID, fileKey
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return "", "", nil, err
 	}
-	absWorkDir, err := filepath.Abs(workDir)
-	if err != nil {
-		return "", "", nil, err
-	}
 
-	safeName := sanitizeFilename(fileName)
-	if strings.Contains(safeName, string(os.PathSeparator)) || safeName == "." || safeName == ".." {
-		return "", "", nil, fmt.Errorf("invalid filename: %s", fileName)
-	}
-	absWorkDir, err := filepath.Abs(filepath.Clean(workDir))
-	if err != nil {
-		return "", "", nil, err
-	}
-	absOutPath := filepath.Clean(filepath.Join(absWorkDir, safeName))
-	if !strings.HasPrefix(absOutPath, absWorkDir+string(os.PathSeparator)) && absOutPath != absWorkDir {
-		return "", "", nil, fmt.Errorf("path traversal attempt: %s", absOutPath)
-	}
+		safeName := sanitizeFilename(fileName)
+		if !filepath.IsLocal(safeName) {
+			return "", "", nil, fmt.Errorf("invalid filename: %s", fileName)
+		}
+		absWorkDir, err := filepath.Abs(filepath.Clean(workDir))
+		if err != nil {
+			return "", "", nil, err
+		}
+		outPath := filepath.Join(absWorkDir, safeName)
 
-	f, err := os.Create(absOutPath)
-	if err != nil {
-		return "", "", nil, err
-	}
-	defer f.Close()
+		f, err := os.Create(outPath)
+		if err != nil {
+			return "", "", nil, err
+		}
+		defer f.Close()
 
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		_ = os.Remove(absOutPath)
-		return "", "", nil, err
-	}
+		if _, err := io.Copy(f, resp.Body); err != nil {
+			_ = os.Remove(outPath)
+			return "", "", nil, err
+		}
 
-	return absOutPath, fileName, func() { _ = os.Remove(absOutPath) }, nil
+		return outPath, fileName, func() { _ = os.Remove(outPath) }, nil
 }
 
 // --- Card action handling ---
