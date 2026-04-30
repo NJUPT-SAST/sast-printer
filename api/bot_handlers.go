@@ -13,7 +13,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -481,26 +480,12 @@ func downloadBotFile(ctx context.Context, cfg *config.Config, messageID, fileKey
 		return "", "", nil, fmt.Errorf("download status %d", resp.StatusCode)
 	}
 
-	workDir := cfg.Bot.WorkDir
-	if err := os.MkdirAll(workDir, 0o755); err != nil {
+	f, err := os.CreateTemp(tempDir(), "bot-*")
+	if err != nil {
 		return "", "", nil, err
 	}
-
-		safeName := sanitizeFilename(fileName)
-		if !filepath.IsLocal(safeName) {
-			return "", "", nil, fmt.Errorf("invalid filename: %s", fileName)
-		}
-		absWorkDir, err := filepath.Abs(filepath.Clean(workDir))
-		if err != nil {
-			return "", "", nil, err
-		}
-		outPath := filepath.Join(absWorkDir, safeName)
-
-		f, err := os.Create(outPath)
-		if err != nil {
-			return "", "", nil, err
-		}
-		defer f.Close()
+	outPath := f.Name()
+	defer f.Close()
 
 		if _, err := io.Copy(f, resp.Body); err != nil {
 			_ = os.Remove(outPath)

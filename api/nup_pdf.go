@@ -117,7 +117,7 @@ func createNupPDF(sourcePath string, nup int, direction string, selectedPages []
 	refDim := pageDims[indices[0]-1]
 	layout := getOptimalLayout(refDim.Width, refDim.Height, nup)
 
-	workDir, err := os.MkdirTemp("", "goprint-nup-")
+	workDir, err := os.MkdirTemp(tempDir(), "goprint-nup-")
 	if err != nil {
 		return "", nil, err
 	}

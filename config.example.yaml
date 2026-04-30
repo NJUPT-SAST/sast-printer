@@ -126,8 +126,6 @@ bot:
   bot_name: "GoPrint"
   # 卡片交互超时时间（Go duration 格式）
   card_timeout: 10m
-  # Bot 临时文件存放目录
-  work_dir: /tmp/bot-files
 
 # 按文件扩展名的默认打印参数（不带点）
 file_type_defaults:

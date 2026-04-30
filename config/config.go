@@ -111,7 +111,6 @@ type BotConfig struct {
 	EncryptKey        string `yaml:"encrypt_key"`
 	BotName           string `yaml:"bot_name"`
 	CardTimeout       string `yaml:"card_timeout"`
-	WorkDir           string `yaml:"work_dir"`
 }
 
 // FileTypeDefault 按文件扩展名的默认打印参数
@@ -239,9 +238,6 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Bot.CardTimeout == "" {
 		cfg.Bot.CardTimeout = "10m"
-	}
-	if cfg.Bot.WorkDir == "" {
-		cfg.Bot.WorkDir = "/tmp/bot-files"
 	}
 
 	cfg.FileTypeDefaults = resolveFileTypeRefs(cfg.FileTypeDefaults)
