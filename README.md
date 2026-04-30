@@ -216,9 +216,19 @@ file_type_defaults:
     duplex: auto
     nup: 1
     collate: true
-    direction: horizontal
+  doc:
+    copies: 1
+    duplex: "off"
+    nup: 2
+    collate: true
   docx:
-    $ref: pdf    # 引用 pdf 的配置
+    $ref: doc     # 引用 doc 的配置
+  _cloud_doc:      # 飞书云文档专用，Bot 识别到链接时自动应用
+    copies: 1
+    duplex: "off"
+    nup: 2
+    collate: true
+    direction: horizontal
 ```
 
 ## 示例请求
@@ -339,7 +349,7 @@ curl -sS -X POST http://localhost:5001/api/jobs/feishu \
 - `copies`：打印份数（默认 `1`）
 - `duplex`：是否启用双面打印（默认 `false`）
 - `collate`：份数排列方式（默认 `true`）
-- `nup`：每版打印页数（`1`/`2`/`4`，默认 `1`）
+- `nup`：每版打印页数（`1`/`2`/`4`/`6`，默认 `1`）
 - `pages`：页码范围（如 `"1-5,10"`）
 
 知识库文档打印示例：
@@ -449,11 +459,22 @@ file_type_defaults:
     pdf:
         copies: 1
         duplex: auto
+        nup: 1
+        collate: true
+        direction: horizontal
+    doc:
+        copies: 1
+        duplex: "off"
+        nup: 2
         collate: true
     jpg:
         $ref: pdf
-    png:
-        $ref: pdf
+    _cloud_doc:
+        copies: 1
+        duplex: "off"
+        nup: 2
+        collate: true
+        direction: horizontal
 
 printers:
   - id: sast-printer
@@ -538,6 +559,7 @@ printers:
 - `file_type_defaults.<ext>.collate`：逐份打印（默认 `true`）
 - `file_type_defaults.<ext>.direction`：N-up 排版方向（`horizontal` / `vertical`）
 - `file_type_defaults.<ext>.$ref`：引用另一扩展名的配置（如 `jpg.$ref: pdf`）
+- `file_type_defaults._cloud_doc`：飞书云文档专用默认参数，区别于普通 PDF 文件；Bot 识别到云文档链接时自动应用
 
 ### Printers
 
