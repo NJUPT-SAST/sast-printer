@@ -54,6 +54,9 @@ printing:
   ipp_username: goprint
   # Manual duplex hook expiration; Go duration format (e.g. 10m, 30m, 1h)
   manual_duplex_hook_ttl: 30m
+  # Temporary file directory. All short-lived print/export files are
+  # created here with unique names and cleaned up on server start.
+  temp_dir: /tmp/goprint
 
 office_conversion:
   # Enable Python gRPC office converter for doc/docx/ppt/pptx.

@@ -92,14 +92,14 @@ func prepareManualDuplexFiles(sourcePath string, printerCfg config.PrinterConfig
 		return "", "", nil, fmt.Errorf("invalid pdf page count: %d", totalPages)
 	}
 
-	workDir, err := os.MkdirTemp("", "goprint-manual-duplex-")
+	workDir, err := os.MkdirTemp(tempDir(), "goprint-manual-duplex-")
 	if err != nil {
 		return "", "", nil, err
 	}
 	cleanup := func() { _ = os.RemoveAll(workDir) }
 
 	firstPassPath := filepath.Join(workDir, "first-pass.pdf")
-	secondPassFile, err := os.CreateTemp("", "goprint-manual-duplex-second-pass-*.pdf")
+	secondPassFile, err := os.CreateTemp(tempDir(), "goprint-manual-duplex-second-pass-*.pdf")
 	if err != nil {
 		cleanup()
 		return "", "", nil, err
@@ -276,7 +276,7 @@ func prepareReversedPDF(sourcePath string) (string, error) {
 		selectors = append(selectors, strconv.Itoa(i))
 	}
 
-	tmpFile, err := os.CreateTemp("", "goprint-reverse-*.pdf")
+	tmpFile, err := os.CreateTemp(tempDir(), "goprint-reverse-*.pdf")
 	if err != nil {
 		return "", err
 	}
@@ -300,7 +300,7 @@ func buildOrderedPDF(sourcePath, outPath string, selectors []string) error {
 		return fmt.Errorf("empty selectors")
 	}
 
-	workDir, err := os.MkdirTemp("", "goprint-order-*")
+	workDir, err := os.MkdirTemp(tempDir(), "goprint-order-*")
 	if err != nil {
 		return err
 	}
@@ -341,7 +341,7 @@ func ApplyCollateCopies(sourcePath string, copies int) (string, error) {
 		}
 	}
 
-	tmpFile, err := os.CreateTemp("", "goprint-collate-*.pdf")
+	tmpFile, err := os.CreateTemp(tempDir(), "goprint-collate-*.pdf")
 	if err != nil {
 		return "", err
 	}
@@ -388,7 +388,7 @@ func ApplyUncollatedCopies(sourcePath string, copies int) (string, error) {
 		}
 	}
 
-	tmpFile, err := os.CreateTemp("", "goprint-uncollate-*.pdf")
+	tmpFile, err := os.CreateTemp(tempDir(), "goprint-uncollate-*.pdf")
 	if err != nil {
 		return "", err
 	}
@@ -525,7 +525,7 @@ func extractPDFPages(sourcePath string, pagesStr string) (string, func(), error)
 	}
 
 	// 创建临时文件存储提取后的 PDF
-	tmpFile, err := os.CreateTemp("", "goprint-pages-*.pdf")
+	tmpFile, err := os.CreateTemp(tempDir(), "goprint-pages-*.pdf")
 	if err != nil {
 		return "", nil, err
 	}
@@ -641,5 +641,5 @@ func applyNupLayout(sourcePath string, nup int) (string, func(), error) {
 		return sourcePath, func() {}, nil
 	}
 
-	return createNupPDF(sourcePath, nup, "horizontal", nil)
+		return createNupPDF(sourcePath, nup, "horizontal", nil)
 }

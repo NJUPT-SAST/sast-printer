@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -25,7 +24,6 @@ import (
 const (
 	feishuExportPollInterval = 2 * time.Second
 	feishuExportMaxPolls     = 60 // max ~2 minutes
-	feishuExportWorkDir      = "/tmp/feishu-export"
 )
 
 type feishuDocInfo struct {
@@ -308,19 +306,11 @@ func downloadExportedFile(ctx context.Context, client *lark.Client, userAccessTo
 		return "", fmt.Errorf("download returned empty file body")
 	}
 
-	if err := os.MkdirAll(feishuExportWorkDir, 0o755); err != nil {
-		return "", fmt.Errorf("failed to create export work dir: %w", err)
+	f, err := os.CreateTemp(tempDir(), "feishu-export-*.pdf")
+	if err != nil {
+		return "", fmt.Errorf("failed to create output file: %w", err)
 	}
-
-	safeFilename := "export.pdf"
-	if filename != "" {
-		safeFilename = sanitizeFilename(filename) + ".pdf"
-	}
-
-	outPath := filepath.Join(feishuExportWorkDir, safeFilename)
-	_ = os.Remove(outPath)
-
-	f, err := os.Create(outPath)
+	outPath := f.Name()
 	if err != nil {
 		return "", fmt.Errorf("failed to create output file: %w", err)
 	}

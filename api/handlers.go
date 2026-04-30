@@ -75,7 +75,7 @@ func uploadWorkDir(cfg *config.Config, filename string) string {
 			return dir
 		}
 	}
-	return os.TempDir()
+	return tempDir()
 }
 
 func saveUploadedToDir(c *gin.Context, file *multipart.FileHeader, dir, prefix string) (string, error) {

@@ -3,6 +3,8 @@ package api
 import (
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -96,4 +98,30 @@ func newCupsClientForPrinter(printer config.PrinterConfig) (*cups.CupsClient, st
 
 	client := cups.NewCupsClient(host, port, cfg.Printing.IPPUsername)
 	return client, printerName, nil
+}
+
+func tempDir() string {
+	cfg := getConfig()
+	if cfg != nil {
+		dir := strings.TrimSpace(cfg.Printing.TempDir)
+		if dir != "" {
+			return dir
+		}
+	}
+	return os.TempDir()
+}
+
+func InitTempDir() error {
+	dir := tempDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("failed to create temp dir %s: %w", dir, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("failed to read temp dir %s: %w", dir, err)
+	}
+	for _, entry := range entries {
+		_ = os.RemoveAll(filepath.Join(dir, entry.Name()))
+	}
+	return nil
 }

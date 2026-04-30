@@ -75,6 +75,7 @@ type FeishuBitableConfig struct {
 type PrintingConfig struct {
 	IPPUsername         string `yaml:"ipp_username"`
 	ManualDuplexHookTTL string `yaml:"manual_duplex_hook_ttl"`
+	TempDir             string `yaml:"temp_dir"`
 }
 
 // OfficeConversionConfig Office 文档转换配置（通过 Python gRPC 服务）
@@ -160,6 +161,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Printing.ManualDuplexHookTTL == "" {
 		cfg.Printing.ManualDuplexHookTTL = "30m"
+	}
+	if cfg.Printing.TempDir == "" {
+		cfg.Printing.TempDir = "/tmp/goprint"
 	}
 	if cfg.OfficeConversion.GRPCAddress == "" {
 		cfg.OfficeConversion.GRPCAddress = "127.0.0.1:50061"
