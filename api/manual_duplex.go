@@ -628,14 +628,9 @@ func parsePagesString(pagesStr string, totalPages int) ([]string, error) {
 	return selectors, nil
 }
 
-// applyNupLayout 实现 N-up 布局 (2-up 或 4-up)
-// 对于 2-up，根据文档方向自动调整输出页面方向：
-// - 纵向文档 (portrait) → 横向排布 (landscape)
-// - 横向文档 (landscape) → 纵向排布 (portrait)
-// 对于 4-up，保持默认方向不变
 func applyNupLayout(sourcePath string, nup int) (string, func(), error) {
-	if nup < 2 || nup > 4 {
-		return "", nil, fmt.Errorf("nup must be 2 or 4, got %d", nup)
+	if nup < 2 {
+		return sourcePath, func() {}, nil
 	}
 
 	totalPages, err := pdfapi.PageCountFile(sourcePath)
@@ -646,81 +641,5 @@ func applyNupLayout(sourcePath string, nup int) (string, func(), error) {
 		return sourcePath, func() {}, nil
 	}
 
-	pageDims, err := pdfapi.PageDimsFile(sourcePath)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to read pdf page dimensions: %w", err)
-	}
-	if len(pageDims) == 0 {
-		return "", nil, fmt.Errorf("pdf has no pages")
-	}
-
-	// 检测主要方向 (主要是纵向还是横向)
-	isPortrait := true
-	portraitCount := 0
-	for _, dim := range pageDims {
-		if dim.Height > dim.Width {
-			portraitCount++
-		}
-	}
-	if portraitCount <= len(pageDims)/2 {
-		isPortrait = false
-	}
-
-	tmpFile, err := os.CreateTemp("", "goprint-nup-*.pdf")
-	if err != nil {
-		return "", nil, err
-	}
-	outPath := tmpFile.Name()
-	_ = tmpFile.Close()
-
-	cleanup := func() {
-		_ = os.Remove(outPath)
-	}
-
-	// 使用 gofpdf 创建 N-up 布局
-	// 读取源 PDF 的每一页，缩放后放入新的 A4 页面
-	if err := buildNupPDF(sourcePath, outPath, nup, isPortrait); err != nil {
-		cleanup()
-		return "", nil, fmt.Errorf("failed to build nup layout: %w", err)
-	}
-
-	return outPath, cleanup, nil
-}
-
-// buildNupPDF 使用 pdfcpu 的缩放和合并功能创建 N-up 布局
-// 当前实现通过缩放页面并合并来模拟 N-up，但理想情况下应该
-// 在单个页面上布局多个缩放的页面
-func buildNupPDF(sourcePath, outPath string, nup int, sourceIsPortrait bool) error {
-	// 参数验证
-	if nup != 2 && nup != 4 {
-		return fmt.Errorf("unsupported nup value: %d", nup)
-	}
-
-	_ = sourceIsPortrait // 供未来扩展使用
-
-	// 暂时实现：复制源文件
-	// 真正的 N-up 实现需要与 PDF 内容流交互，在单个页面上布局多个缩放的页面
-	if err := copyFile(sourcePath, outPath); err != nil {
-		return fmt.Errorf("failed to create nup pdf: %w", err)
-	}
-
-	return nil
-}
-
-// copyFile 复制文件
-func copyFile(src, dst string) error {
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer srcFile.Close()
-
-	dstFile, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer dstFile.Close()
-
-	_, err = io.Copy(dstFile, srcFile)
-	return err
+	return createNupPDF(sourcePath, nup, "horizontal", nil)
 }

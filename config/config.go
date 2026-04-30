@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -228,6 +229,18 @@ func applyDefaults(cfg *Config) {
 			p.PadToEven = &v
 		}
 	}
+
+	if cfg.Bot.BotName == "" {
+		cfg.Bot.BotName = "GoPrint"
+	}
+	if cfg.Bot.CardTimeout == "" {
+		cfg.Bot.CardTimeout = "10m"
+	}
+	if cfg.Bot.WorkDir == "" {
+		cfg.Bot.WorkDir = "/tmp/bot-files"
+	}
+
+	cfg.FileTypeDefaults = resolveFileTypeRefs(cfg.FileTypeDefaults)
 }
 
 	if cfg.Bot.BotName == "" {
@@ -410,4 +423,92 @@ func (c *Config) VisiblePrinters() []PrinterConfig {
 		}
 	}
 	return out
+}
+
+// resolveFileTypeRefs 展开 $ref 引用。使用拓扑排序解析依赖，循环引用会被跳过。
+func resolveFileTypeRefs(raw map[string]FileTypeDefault) map[string]FileTypeDefault {
+	if raw == nil {
+		raw = make(map[string]FileTypeDefault)
+	}
+
+	cut := make(map[string]FileTypeDefault, len(raw))
+	for k, v := range raw {
+		cut[k] = v
+	}
+
+	inDegree := make(map[string]int)
+	adj := make(map[string][]string)
+	for ext := range cut {
+		inDegree[ext] = 0
+	}
+
+	for ext, def := range cut {
+		ref := strings.TrimSpace(def.Ref)
+		if ref == "" {
+			continue
+		}
+		if _, ok := cut[ref]; !ok {
+			log.Printf("[config] file_type_defaults.%s $ref=%s not found, ignoring", ext, ref)
+			continue
+		}
+		if ref == ext {
+			log.Printf("[config] file_type_defaults.%s self-referencing $ref, ignoring", ext)
+			continue
+		}
+		adj[ref] = append(adj[ref], ext)
+		inDegree[ext]++
+	}
+
+	var queue []string
+	for ext := range cut {
+		if inDegree[ext] == 0 {
+			queue = append(queue, ext)
+		}
+	}
+	sort.Strings(queue)
+
+	result := make(map[string]FileTypeDefault, len(cut))
+	for len(queue) > 0 {
+		ext := queue[0]
+		queue = queue[1:]
+		def := cut[ext]
+		ref := strings.TrimSpace(def.Ref)
+		if ref != "" {
+			if resolved, ok := result[ref]; ok {
+				def = resolved
+			}
+		}
+		result[ext] = def
+		for _, next := range adj[ext] {
+			inDegree[next]--
+			if inDegree[next] == 0 {
+				queue = append(queue, next)
+			}
+		}
+	}
+
+	return result
+}
+
+// ResolveFileTypeDefault 根据文件名查询默认打印参数
+func (c *Config) ResolveFileTypeDefault(filename string) FileTypeDefault {
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(filename)), ".")
+	if ext == "" {
+		return hardcodedDefault()
+	}
+	if def, ok := c.FileTypeDefaults[ext]; ok {
+		return def
+	}
+	return hardcodedDefault()
+}
+
+func hardcodedDefault() FileTypeDefault {
+	v := true
+	return FileTypeDefault{
+		Copies:    1,
+		Duplex:    "off",
+		Nup:       1,
+		Collate:   &v,
+		Direction: "horizontal",
+	}
 }
