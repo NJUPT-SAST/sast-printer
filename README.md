@@ -304,15 +304,15 @@ curl -sS "http://localhost:5001/api/auth/config/jssdk-config?url=https://your-do
 ```json
 {
   "appId": "cli_xxxxxxxxxxxx",
-  "timestamp": "1746000000",
+  "timestamp": "1746000000123",
   "nonceStr": "a1b2c3d4e5f6g7h8",
   "signature": "abcd1234efgh5678..."
 }
 ```
 
-前端使用返回值调用 `tt.config()` 完成 JSSDK 鉴权后即可使用 `tt.docsPicker()` 等需鉴权的 JSAPI。
+前端使用返回值调用 `h5sdk.config()` 完成 JSSDK 鉴权后即可使用 `tt.docsPicker()` 等需鉴权的 JSAPI。鉴权通过 `h5sdk` 命名空间完成，JSAPI 通过 `tt` 命名空间调用，两者独立。
 
-签名算法：`SHA1(jsapi_ticket + nonceStr + timestamp + pageURL)`，其中 `jsapi_ticket` 通过飞书 Open API `/open-apis/jssdk/ticket/get` 获取。
+签名算法：`SHA1("jsapi_ticket={ticket}&noncestr={nonceStr}&timestamp={timestamp}&url={pageURL}")`，其中 `timestamp` 为毫秒级 Unix 时间戳，`jsapi_ticket` 通过飞书 Open API `/open-apis/jssdk/ticket/get` 获取。
 
 ### 6) 访问 scanservjs
 
