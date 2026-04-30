@@ -175,7 +175,11 @@ func createExportTask(ctx context.Context, client *lark.Client, userAccessToken 
 		ExportTask(task).
 		Build()
 
-	resp, err := client.Drive.V1.ExportTask.Create(ctx, req, larkcore.WithUserAccessToken(userAccessToken))
+	var opts []larkcore.RequestOptionFunc
+	if userAccessToken != "" {
+		opts = append(opts, larkcore.WithUserAccessToken(userAccessToken))
+	}
+	resp, err := client.Drive.V1.ExportTask.Create(ctx, req, opts...)
 	if err != nil {
 		return "", fmt.Errorf("export task create call failed: %w", err)
 	}
@@ -204,7 +208,11 @@ func pollExportTask(ctx context.Context, client *lark.Client, userAccessToken st
 			Token(token).
 			Build()
 
-		resp, err := client.Drive.V1.ExportTask.Get(ctx, req, larkcore.WithUserAccessToken(userAccessToken))
+		var opts []larkcore.RequestOptionFunc
+		if userAccessToken != "" {
+			opts = append(opts, larkcore.WithUserAccessToken(userAccessToken))
+		}
+		resp, err := client.Drive.V1.ExportTask.Get(ctx, req, opts...)
 		if err != nil {
 			log.Printf("[feishu-export] poll %d/%d ticket=%s call failed: %v", i+1, feishuExportMaxPolls, ticket, err)
 			continue
@@ -285,7 +293,11 @@ func downloadExportedFile(ctx context.Context, client *lark.Client, userAccessTo
 		FileToken(fileToken).
 		Build()
 
-	resp, err := client.Drive.V1.ExportTask.Download(ctx, req, larkcore.WithUserAccessToken(userAccessToken))
+	var opts []larkcore.RequestOptionFunc
+	if userAccessToken != "" {
+		opts = append(opts, larkcore.WithUserAccessToken(userAccessToken))
+	}
+	resp, err := client.Drive.V1.ExportTask.Download(ctx, req, opts...)
 	if err != nil {
 		return "", fmt.Errorf("download call failed: %w", err)
 	}

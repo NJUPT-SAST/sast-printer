@@ -110,3 +110,56 @@ printers:
     reverse_second_pass: true
     rotate_second_pass: true
     note: "manual duplex profile for this model"
+
+# 飞书 Bot 配置
+bot:
+  # 启用飞书 Bot 事件订阅。需在飞书开放平台配置事件订阅 URL。
+  enabled: false
+  # 飞书开放平台事件订阅的 Verification Token
+  verification_token: ""
+  # 飞书应用的 Encrypt Key（若在开放平台开启了加密）
+  encrypt_key: ""
+  # 机器人名称，群聊中 @ 此名称触发
+  bot_name: "GoPrint"
+  # 卡片交互超时时间（Go duration 格式）
+  card_timeout: 10m
+  # Bot 临时文件存放目录
+  work_dir: /tmp/bot-files
+
+# 按文件扩展名的默认打印参数（不带点）
+file_type_defaults:
+  pdf:
+    copies: 1
+    duplex: auto
+    nup: 1
+    collate: true
+    direction: horizontal
+  doc:
+    copies: 1
+    duplex: "off"
+    nup: 2
+    collate: true
+  docx:
+    $ref: doc
+  ppt:
+    copies: 1
+    duplex: "off"
+    nup: 4
+    collate: true
+  pptx:
+    $ref: ppt
+  jpg:
+    copies: 1
+    duplex: "off"
+    nup: 1
+    collate: true
+  jpeg:
+    $ref: jpg
+  png:
+    $ref: jpg
+  _cloud_doc:
+    copies: 1
+    duplex: "off"
+    nup: 2
+    collate: true
+    direction: horizontal

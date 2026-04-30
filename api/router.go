@@ -65,6 +65,12 @@ func SetupRouter() *gin.Engine {
 		manualDuplex.POST("/:token/cancel", CancelManualDuplexPrint)     // 取消手动双面打印
 	}
 
+	// 飞书 Bot 事件订阅
+	bot := router.Group("/api/bot")
+	{
+		bot.POST("/events", HandleBotEvent)
+	}
+
 	// 前端路由：从 public 目录读取静态资源，并为 SPA 路由回退 index.html。
 	registerFrontendRoutes(router)
 

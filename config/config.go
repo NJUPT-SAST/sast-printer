@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,7 +21,9 @@ type Config struct {
 	JobStore         JobStoreConfig         `yaml:"job_store"`
 	Printing         PrintingConfig         `yaml:"printing"`
 	OfficeConversion OfficeConversionConfig `yaml:"office_conversion"`
-	Printers         []PrinterConfig        `yaml:"printers"`
+	Printers         []PrinterConfig              `yaml:"printers"`
+	Bot              BotConfig                    `yaml:"bot"`
+	FileTypeDefaults map[string]FileTypeDefault   `yaml:"file_type_defaults"`
 }
 
 // ServerConfig 服务器配置
@@ -98,6 +101,26 @@ type PrinterConfig struct {
 	ReverseSecondPass bool   `yaml:"reverse_second_pass"`
 	RotateSecondPass  bool   `yaml:"rotate_second_pass"`
 	Note              string `yaml:"note"`
+}
+
+// BotConfig 飞书 Bot 配置
+type BotConfig struct {
+	Enabled           bool   `yaml:"enabled"`
+	VerificationToken string `yaml:"verification_token"`
+	EncryptKey        string `yaml:"encrypt_key"`
+	BotName           string `yaml:"bot_name"`
+	CardTimeout       string `yaml:"card_timeout"`
+	WorkDir           string `yaml:"work_dir"`
+}
+
+// FileTypeDefault 按文件扩展名的默认打印参数
+type FileTypeDefault struct {
+	Ref       string `yaml:"$ref"`
+	Copies    int    `yaml:"copies"`
+	Duplex    string `yaml:"duplex"`
+	Nup       int    `yaml:"nup"`
+	Collate   *bool  `yaml:"collate"`
+	Direction string `yaml:"direction"`
 }
 
 // LoadFromFile 从YAML文件加载配置
@@ -206,6 +229,18 @@ func applyDefaults(cfg *Config) {
 			p.PadToEven = &v
 		}
 	}
+
+	if cfg.Bot.BotName == "" {
+		cfg.Bot.BotName = "GoPrint"
+	}
+	if cfg.Bot.CardTimeout == "" {
+		cfg.Bot.CardTimeout = "10m"
+	}
+	if cfg.Bot.WorkDir == "" {
+		cfg.Bot.WorkDir = "/tmp/bot-files"
+	}
+
+	cfg.FileTypeDefaults = resolveFileTypeRefs(cfg.FileTypeDefaults)
 }
 
 func validateConfig(cfg *Config) error {
@@ -377,4 +412,101 @@ func (c *Config) VisiblePrinters() []PrinterConfig {
 		}
 	}
 	return out
+}
+
+// resolveFileTypeRefs 展开 $ref 引用。使用拓扑排序解析依赖，循环引用会被跳过。
+func resolveFileTypeRefs(raw map[string]FileTypeDefault) map[string]FileTypeDefault {
+	if raw == nil {
+		raw = make(map[string]FileTypeDefault)
+	}
+
+	cut := make(map[string]FileTypeDefault, len(raw))
+	for k, v := range raw {
+		cut[k] = v
+	}
+
+	inDegree := make(map[string]int)
+	adj := make(map[string][]string)
+	for ext := range cut {
+		inDegree[ext] = 0
+	}
+
+	for ext, def := range cut {
+		ref := strings.TrimSpace(def.Ref)
+		if ref == "" {
+			continue
+		}
+		if _, ok := cut[ref]; !ok {
+			log.Printf("[config] file_type_defaults.%s $ref=%s not found, ignoring", ext, ref)
+			continue
+		}
+		if ref == ext {
+			log.Printf("[config] file_type_defaults.%s self-referencing $ref, ignoring", ext)
+			continue
+		}
+		adj[ref] = append(adj[ref], ext)
+		inDegree[ext]++
+	}
+
+	var queue []string
+	for ext := range cut {
+		if inDegree[ext] == 0 {
+			queue = append(queue, ext)
+		}
+	}
+	sort.Strings(queue)
+
+	result := make(map[string]FileTypeDefault, len(cut))
+	for len(queue) > 0 {
+		ext := queue[0]
+		queue = queue[1:]
+		def := cut[ext]
+		ref := strings.TrimSpace(def.Ref)
+		if ref != "" {
+			if resolved, ok := result[ref]; ok {
+				def = resolved
+			}
+		}
+		result[ext] = def
+		for _, next := range adj[ext] {
+			inDegree[next]--
+			if inDegree[next] == 0 {
+				queue = append(queue, next)
+			}
+		}
+	}
+
+	return result
+}
+
+// ResolveFileTypeDefault 根据文件名查询默认打印参数
+func (c *Config) ResolveFileTypeDefault(filename string) FileTypeDefault {
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(filename)), ".")
+	if ext == "" {
+		return hardcodedDefault()
+	}
+	if def, ok := c.FileTypeDefaults[ext]; ok {
+		return def
+	}
+	return hardcodedDefault()
+}
+
+// CloudDocDefault 返回飞书云文档的默认打印参数。
+// 与普通 PDF 区分开：云文档通常使用单面 + 二合一缩印。
+func (c *Config) CloudDocDefault() FileTypeDefault {
+	if def, ok := c.FileTypeDefaults["_cloud_doc"]; ok {
+		return def
+	}
+	return hardcodedDefault()
+}
+
+func hardcodedDefault() FileTypeDefault {
+	v := true
+	return FileTypeDefault{
+		Copies:    1,
+		Duplex:    "off",
+		Nup:       1,
+		Collate:   &v,
+		Direction: "horizontal",
+	}
 }
