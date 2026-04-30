@@ -20,7 +20,9 @@ type Config struct {
 	JobStore         JobStoreConfig         `yaml:"job_store"`
 	Printing         PrintingConfig         `yaml:"printing"`
 	OfficeConversion OfficeConversionConfig `yaml:"office_conversion"`
-	Printers         []PrinterConfig        `yaml:"printers"`
+	Printers         []PrinterConfig              `yaml:"printers"`
+	Bot              BotConfig                    `yaml:"bot"`
+	FileTypeDefaults map[string]FileTypeDefault   `yaml:"file_type_defaults"`
 }
 
 // ServerConfig 服务器配置
@@ -98,6 +100,26 @@ type PrinterConfig struct {
 	ReverseSecondPass bool   `yaml:"reverse_second_pass"`
 	RotateSecondPass  bool   `yaml:"rotate_second_pass"`
 	Note              string `yaml:"note"`
+}
+
+// BotConfig 飞书 Bot 配置
+type BotConfig struct {
+	Enabled           bool   `yaml:"enabled"`
+	VerificationToken string `yaml:"verification_token"`
+	EncryptKey        string `yaml:"encrypt_key"`
+	BotName           string `yaml:"bot_name"`
+	CardTimeout       string `yaml:"card_timeout"`
+	WorkDir           string `yaml:"work_dir"`
+}
+
+// FileTypeDefault 按文件扩展名的默认打印参数
+type FileTypeDefault struct {
+	Ref       string `yaml:"$ref"`
+	Copies    int    `yaml:"copies"`
+	Duplex    string `yaml:"duplex"`
+	Nup       int    `yaml:"nup"`
+	Collate   *bool  `yaml:"collate"`
+	Direction string `yaml:"direction"`
 }
 
 // LoadFromFile 从YAML文件加载配置
@@ -205,6 +227,17 @@ func applyDefaults(cfg *Config) {
 			v := true
 			p.PadToEven = &v
 		}
+	}
+}
+
+	if cfg.Bot.BotName == "" {
+		cfg.Bot.BotName = "GoPrint"
+	}
+	if cfg.Bot.CardTimeout == "" {
+		cfg.Bot.CardTimeout = "10m"
+	}
+	if cfg.Bot.WorkDir == "" {
+		cfg.Bot.WorkDir = "/tmp/bot-files"
 	}
 }
 
