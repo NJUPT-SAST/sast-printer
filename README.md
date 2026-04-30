@@ -18,6 +18,7 @@ GoPrint 是一个基于 Golang 的打印后端服务，通过 CUPS/IPP 与系统
 
 - `gin-gonic/gin`：HTTP API 框架
 - `phin1x/go-ipp`：IPP/CUPS 客户端
+- `larksuite/oapi-sdk-go/v3`：飞书开放平台 SDK（OAuth 鉴权、文档导出、JSSDK 签名）
 
 ## 运行要求
 
@@ -98,6 +99,13 @@ docker exec sast-office-converter sh -lc "fc-list | wc -l"
 
 - `GET /health`
 
+### 鉴权接口
+
+- `GET /api/auth/config`：返回飞书 OAuth 配置（`app_id` 等）
+- `GET /api/auth/config/authorize-url`：生成飞书 OAuth 授权地址
+- `POST /api/auth/config/code-login`：用飞书 code 换取 token 和用户信息
+- `GET /api/auth/config/jssdk-config`：获取飞书 H5 JSSDK 鉴权签名
+
 ### 打印机接口
 
 - `GET /api/printers`：获取打印机列表
@@ -107,6 +115,7 @@ docker exec sast-office-converter sh -lc "fc-list | wc -l"
 
 - `POST /api/jobs`：提交打印任务
 - `POST /api/jobs/preview`：转换文件并返回预览 PDF
+- `GET /api/jobs/supported-file-types`：获取当前支持的文件类型列表
 - `GET /api/jobs`：获取任务列表
 - `GET /api/jobs/:id`：获取任务详情/状态
 - `DELETE /api/jobs/:id`：删除任务记录（不会向 CUPS 下发取消）
@@ -119,6 +128,7 @@ docker exec sast-office-converter sh -lc "fc-list | wc -l"
 ### 手动双面 Hook 接口
 
 - `POST /api/manual-duplex-hooks/:token/continue`：提交手动双面剩余页面
+- `POST /api/manual-duplex-hooks/:token/cancel`：取消手动双面并清理暂存文件
 
 ### scanservjs 代理
 
@@ -192,13 +202,34 @@ curl -sS -X DELETE http://localhost:5001/api/jobs/29
 
 说明：该接口仅删除任务存储中的记录，不会取消打印机上的物理任务。
 
-### 5) 访问 scanservjs
+### 5) 获取 JSSDK 鉴权配置
+
+```bash
+curl -sS "http://localhost:5001/api/auth/config/jssdk-config?url=https://your-domain.com/printers?id=xxx"
+```
+
+返回示例：
+
+```json
+{
+  "appId": "cli_xxxxxxxxxxxx",
+  "timestamp": "1746000000",
+  "nonceStr": "a1b2c3d4e5f6g7h8",
+  "signature": "abcd1234efgh5678..."
+}
+```
+
+前端使用返回值调用 `tt.config()` 完成 JSSDK 鉴权后即可使用 `tt.docsPicker()` 等需鉴权的 JSAPI。
+
+签名算法：`SHA1(jsapi_ticket + nonceStr + timestamp + pageURL)`，其中 `jsapi_ticket` 通过飞书 Open API `/open-apis/jssdk/ticket/get` 获取。
+
+### 6) 访问 scanservjs
 
 ```bash
 curl -sS -H 'X-Sane-Api-Key: change_me' http://localhost:5001/sane-api/api-docs
 ```
 
-### 6) 导出飞书文档预览
+### 7) 导出飞书文档预览
 
 ```bash
 curl -sS -X POST http://localhost:5001/api/jobs/preview/feishu \
@@ -208,7 +239,7 @@ curl -sS -X POST http://localhost:5001/api/jobs/preview/feishu \
     -o preview.pdf
 ```
 
-### 7) 导出飞书文档并打印
+### 8) 导出飞书文档并打印
 
 ```bash
 curl -sS -X POST http://localhost:5001/api/jobs/feishu \
@@ -288,15 +319,66 @@ server:
     host: 0.0.0.0
     port: 5001
 
+auth:
+    enabled: true
+    feishu:
+        app_id: cli_xxxxxxxxxxxx
+        app_secret: your_app_secret
+        redirect_uri: https://your-domain.com/
+
 printing:
     ipp_username: goprint
     manual_duplex_hook_ttl: 30m
+
+sane_api:
+    target_url: http://192.168.101.37:8080
+    auth_enabled: true
+    auth_header: X-Sane-Api-Key
+    auth_token: change_me
+
+job_store:
+    enabled: false
+    feishu:
+        app_token: bascnxxxxxxxxxxxx
+        table_id: tblxxxxxxxxxxxx
+        request_timeout: 3s
+
+office_conversion:
+    enabled: true
+    start_with_server: false
+    grpc_address: 127.0.0.1:50061
+    service_script: office_converter/run.sh
+    accepted_formats:
+        - doc
+        - docx
+        - ppt
+        - pptx
+    request_timeout: 60s
+    output_dir: /tmp/office-output
+
+bot:
+    enabled: false
+    verification_token: your_verification_token
+    encrypt_key: your_encrypt_key
+    bot_name: GoPrint
+    card_timeout: 10m
+    work_dir: /tmp/bot-files
+
+file_type_defaults:
+    pdf:
+        copies: 1
+        duplex: auto
+        collate: true
+    jpg:
+        $ref: pdf
+    png:
+        $ref: pdf
 
 printers:
   - id: sast-printer
     uri: ipp://localhost:631/printers/sast-printer
     visible: true
-        reverse: false
+    reverse: false
     duplex_mode: off
     first_pass: even
     pad_to_even: true
@@ -308,12 +390,76 @@ printers:
 
 字段说明：
 
-- `printing.ipp_username`：IPP 请求用户名
+### Server
+
+- `server.host`：监听地址（默认 `0.0.0.0`）
+- `server.port`：监听端口（默认 `5001`）
+
+### Auth
+
+- `auth.enabled`：是否启用飞书 OAuth 鉴权（默认 `false`）
+- `auth.feishu.app_id`：飞书自建应用的 App ID
+- `auth.feishu.app_secret`：飞书自建应用的 App Secret
+- `auth.feishu.redirect_uri`：OAuth 回调地址
+- `auth.feishu.authorize_url`：授权页面地址（默认飞书官方地址）
+- `auth.feishu.token_url`：Token 交换地址（默认飞书官方地址）
+- `auth.feishu.user_info_url`：用户信息地址（默认飞书官方地址）
+- `auth.feishu.request_timeout`：飞书 API 请求超时（默认 `3s`）
+- `auth.feishu.token_cache_ttl`：Token 缓存有效期（默认 `2m`）
+
+### Printing
+
+- `printing.ipp_username`：IPP 请求用户名（默认 `goprint`）
 - `printing.manual_duplex_hook_ttl`：手动双面 hook 有效期（默认 `30m`）
-- `sane_api.target_url`：scanservjs 后端地址
+
+### Sane API
+
+- `sane_api.target_url`：scanservjs 后端地址（默认 `http://192.168.101.37:8080`）
 - `sane_api.auth_enabled`：是否启用 `/sane-api` 鉴权（默认 `true`）
 - `sane_api.auth_header`：共享密钥请求头名称（默认 `X-Sane-Api-Key`）
 - `sane_api.auth_token`：共享密钥；当 `auth_enabled: true` 时建议配置
+
+### Job Store
+
+- `job_store.enabled`：是否启用飞书多维表任务存储（默认 `false`）
+- `job_store.feishu.app_token`：飞书多维表的 App Token（`bascn...`）
+- `job_store.feishu.table_id`：多维表 ID（`tbl...`）
+- `job_store.feishu.request_timeout`：请求超时（默认 `3s`）
+
+### Office Conversion
+
+- `office_conversion.enabled`：是否启用 Office 转 PDF（默认 `false`）
+- `office_conversion.start_with_server`：是否随主服务启动转换服务（默认 `false`）
+- `office_conversion.grpc_address`：gRPC 转换服务地址（默认 `127.0.0.1:50061`）
+- `office_conversion.service_script`：转换服务启动脚本（默认 `office_converter/run.sh`）
+- `office_conversion.accepted_formats`：支持的 Office 文件扩展名列表
+- `office_conversion.request_timeout`：转换请求超时（默认 `60s`）
+- `office_conversion.output_dir`：转换输出目录（默认 `/tmp/office-output`）
+
+### Bot
+
+飞书 Bot 配置，用于接收用户消息并通过卡片交互设置打印参数。
+
+- `bot.enabled`：是否启用飞书 Bot（默认 `false`）
+- `bot.verification_token`：飞书事件订阅的 Verification Token
+- `bot.encrypt_key`：飞书事件订阅的 Encrypt Key
+- `bot.bot_name`：Bot 显示名称（默认 `GoPrint`）
+- `bot.card_timeout`：消息卡片超时时间（默认 `10m`）
+- `bot.work_dir`：Bot 下载文件的临时目录（默认 `/tmp/bot-files`）
+
+### File Type Defaults
+
+按文件扩展名配置默认打印参数。支持 `$ref` 引用其他扩展名的配置，避免重复。
+
+- `file_type_defaults.<ext>.copies`：默认打印份数
+- `file_type_defaults.<ext>.duplex`：双面模式（`off` / `auto` / `manual`）
+- `file_type_defaults.<ext>.nup`：每版打印页数（`1` / `2` / `4` / `6`）
+- `file_type_defaults.<ext>.collate`：逐份打印（默认 `true`）
+- `file_type_defaults.<ext>.direction`：N-up 排版方向（`horizontal` / `vertical`）
+- `file_type_defaults.<ext>.$ref`：引用另一扩展名的配置（如 `jpg.$ref: pdf`）
+
+### Printers
+
 - `printers[].uri`：按打印机配置完整 URI（支持不同打印机在不同 CUPS 地址）
 - `printers[].visible`：是否在 `GET /api/printers` 中返回该打印机
 - `printers[].reverse`：单面打印时是否反向页序（双面模式忽略此字段）
