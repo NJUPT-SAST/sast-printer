@@ -1,10 +1,18 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha1"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"goprint/config"
+	"io"
 	"log"
+	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -131,4 +139,121 @@ func mapSDKUserInfo(data *larkext.AuthenUserInfoRespBody) feishuUserInfo {
 		Avatar:    data.AvatarURL,
 		TenantKey: data.TenantKey,
 	}
+}
+
+func randomString(n int) string {
+	b := make([]byte, (n+1)/2)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("randomString: crypto/rand failed: %v", err))
+	}
+	return hex.EncodeToString(b)[:n]
+}
+
+func getTenantAccessToken(ctx context.Context, appID, appSecret string) (string, error) {
+	body, _ := json.Marshal(map[string]string{
+		"app_id":     appID,
+		"app_secret": appSecret,
+	})
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+		bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("build token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("get tenant_access_token: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBytes, _ := io.ReadAll(resp.Body)
+	var result struct {
+		Code              int    `json:"code"`
+		Msg               string `json:"msg"`
+		TenantAccessToken string `json:"tenant_access_token"`
+	}
+	if err := json.Unmarshal(respBytes, &result); err != nil {
+		return "", fmt.Errorf("parse token response: %w", err)
+	}
+	if result.Code != 0 {
+		return "", fmt.Errorf("tenant_access_token error: code=%d msg=%s", result.Code, result.Msg)
+	}
+	if result.TenantAccessToken == "" {
+		return "", fmt.Errorf("empty tenant_access_token")
+	}
+
+	return result.TenantAccessToken, nil
+}
+
+func getJSAPITicket(ctx context.Context, appID, appSecret string) (string, error) {
+	token, err := getTenantAccessToken(ctx, appID, appSecret)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"https://open.feishu.cn/open-apis/jssdk/ticket/get", nil)
+	if err != nil {
+		return "", fmt.Errorf("build ticket request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("get jsapi_ticket: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBytes, _ := io.ReadAll(resp.Body)
+	var result struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Ticket   string `json:"ticket"`
+			ExpireIn int    `json:"expire_in"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respBytes, &result); err != nil {
+		return "", fmt.Errorf("parse ticket response: %w", err)
+	}
+	if result.Code != 0 {
+		return "", fmt.Errorf("jsapi_ticket error: code=%d msg=%s", result.Code, result.Msg)
+	}
+	if result.Data.Ticket == "" {
+		return "", fmt.Errorf("empty jsapi_ticket")
+	}
+
+	log.Printf("[jssdk] got jsapi_ticket expires_in=%d", result.Data.ExpireIn)
+	return result.Data.Ticket, nil
+}
+
+func generateJSSDKConfig(ctx context.Context, cfg *config.Config, pageURL string) (map[string]string, error) {
+	appID := strings.TrimSpace(cfg.Auth.Feishu.AppID)
+	appSecret := strings.TrimSpace(cfg.Auth.Feishu.AppSecret)
+	if appID == "" || appSecret == "" {
+		return nil, fmt.Errorf("auth.feishu.app_id/app_secret is not configured")
+	}
+
+	ticket, err := getJSAPITicket(ctx, appID, appSecret)
+	if err != nil {
+		return nil, err
+	}
+
+	nonceStr := randomString(16)
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+
+	h := sha1.New()
+	h.Write([]byte(ticket + nonceStr + timestamp + pageURL))
+	signature := hex.EncodeToString(h.Sum(nil))
+
+	return map[string]string{
+		"appId":     appID,
+		"timestamp": timestamp,
+		"nonceStr":  nonceStr,
+		"signature": signature,
+	}, nil
 }

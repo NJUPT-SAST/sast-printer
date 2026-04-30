@@ -24,6 +24,7 @@ func SetupRouter() *gin.Engine {
 		feishuAuth.GET("", GetAuthConfig) // 返回认证配置（appID等）给前端
 		feishuAuth.GET("/authorize-url", BuildFeishuAuthorizeURL)
 		feishuAuth.POST("/code-login", ExchangeFeishuCode)
+		feishuAuth.GET("/jssdk-config", GetJSSDKConfig)
 	}
 
 	// CUPS相关接口
