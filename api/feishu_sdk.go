@@ -244,7 +244,7 @@ func generateJSSDKConfig(ctx context.Context, cfg *config.Config, pageURL string
 	}
 
 	nonceStr := randomString(16)
-	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
 
 	verifyStr := fmt.Sprintf("jsapi_ticket=%s&noncestr=%s&timestamp=%s&url=%s",
 		ticket, nonceStr, timestamp, pageURL)
