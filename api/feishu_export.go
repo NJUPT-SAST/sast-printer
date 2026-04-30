@@ -311,9 +311,6 @@ func downloadExportedFile(ctx context.Context, client *lark.Client, userAccessTo
 		return "", fmt.Errorf("failed to create output file: %w", err)
 	}
 	outPath := f.Name()
-	if err != nil {
-		return "", fmt.Errorf("failed to create output file: %w", err)
-	}
 	defer f.Close()
 
 	if _, err := io.Copy(f, resp.File); err != nil {
