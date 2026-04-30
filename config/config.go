@@ -502,6 +502,15 @@ func (c *Config) ResolveFileTypeDefault(filename string) FileTypeDefault {
 	return hardcodedDefault()
 }
 
+// CloudDocDefault 返回飞书云文档的默认打印参数。
+// 与普通 PDF 区分开：云文档通常使用单面 + 二合一缩印。
+func (c *Config) CloudDocDefault() FileTypeDefault {
+	if def, ok := c.FileTypeDefaults["_cloud_doc"]; ok {
+		return def
+	}
+	return hardcodedDefault()
+}
+
 func hardcodedDefault() FileTypeDefault {
 	v := true
 	return FileTypeDefault{

@@ -157,3 +157,9 @@ file_type_defaults:
     $ref: jpg
   png:
     $ref: jpg
+  _cloud_doc:
+    copies: 1
+    duplex: "off"
+    nup: 2
+    collate: true
+    direction: horizontal

@@ -359,6 +359,7 @@ func processMessageEvent(cfg *config.Config, body []byte) {
 	var sourcePath string
 	var filename string
 	var cleanup func()
+	var isCloudDoc bool
 
 	switch msgType {
 	case "file":
@@ -420,6 +421,9 @@ func processMessageEvent(cfg *config.Config, body []byte) {
 	}
 
 	defaults := cfg.ResolveFileTypeDefault(filename)
+	if isCloudDoc {
+		defaults = cfg.CloudDocDefault()
+	}
 	printers := buildPrinterOptions(cfg)
 
 	sessionID := fmt.Sprintf("%s-%d", chatID, time.Now().UnixNano())
