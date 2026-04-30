@@ -38,20 +38,35 @@ type feishuExportRequest struct {
 	URL string `json:"url"`
 }
 
-var feishuPermissionErrRE = regexp.MustCompile(`code=(1069902|131006)\b`)
+var feishuErrCodeRE = regexp.MustCompile(`code=(\d+)\b`)
 
-func isFeishuPermissionDenied(err error) bool {
-	if err == nil {
-		return false
-	}
-	return feishuPermissionErrRE.MatchString(err.Error())
-}
-
+// feishuExportHTTPStatus extracts a Feishu API error code from err and maps it
+// to an HTTP status code. When the upstream returns a 4xx-class error, we
+// forward a corresponding 4xx status to the caller.
 func feishuExportHTTPStatus(err error) int {
-	if isFeishuPermissionDenied(err) {
-		return http.StatusForbidden
+	if err == nil {
+		return http.StatusServiceUnavailable
 	}
-	return http.StatusServiceUnavailable
+
+	m := feishuErrCodeRE.FindStringSubmatch(err.Error())
+	if m == nil {
+		return http.StatusServiceUnavailable
+	}
+
+	switch m[1] {
+	case "131005": // wiki node not found
+		return http.StatusNotFound
+	case "1069906": // document deleted
+		return http.StatusGone
+	case "1069902", "131006": // permission denied (drive / wiki)
+		return http.StatusForbidden
+	case "1069904", "1069905": // invalid parameter / invalid token
+		return http.StatusBadRequest
+	case "1069901", "1069903": // internal error / export task failed
+		return http.StatusInternalServerError
+	default:
+		return http.StatusServiceUnavailable
+	}
 }
 
 func newFeishuClient(cfg *config.Config) (*lark.Client, error) {
