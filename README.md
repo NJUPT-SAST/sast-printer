@@ -12,13 +12,16 @@ GoPrint 是一个基于 Golang 的打印后端服务，通过 CUPS/IPP 与系统
 - 打印任务列表、状态查询（支持后台自动刷新到任务存储）
 - 删除任务记录（仅删除任务存储中的记录）
 - 飞书文档/知识库导出并打印（支持 wiki 节点自动解析、快捷方式跟踪）
+- N-up 缩印打印（2-up / 4-up / 6-up），自动计算最优页面布局
+- 飞书 Bot 交互打印（消息卡片、文件接收、事件解密）
 - 状态细化返回（`status`、`reason`、`raw_state`）
 
 ## 技术栈
 
 - `gin-gonic/gin`：HTTP API 框架
 - `phin1x/go-ipp`：IPP/CUPS 客户端
-- `larksuite/oapi-sdk-go/v3`：飞书开放平台 SDK（OAuth 鉴权、文档导出、JSSDK 签名）
+- `larksuite/oapi-sdk-go/v3`：飞书开放平台 SDK（OAuth 鉴权、文档导出、消息发送、事件订阅）
+- `pdfcpu/pdfcpu`：PDF 页面处理（N-up 缩印、页面提取、合并、缩放、旋转）
 
 ## 运行要求
 
@@ -130,6 +133,12 @@ docker exec sast-office-converter sh -lc "fc-list | wc -l"
 - `POST /api/manual-duplex-hooks/:token/continue`：提交手动双面剩余页面
 - `POST /api/manual-duplex-hooks/:token/cancel`：取消手动双面并清理暂存文件
 
+### 飞书 Bot 接口
+
+- `POST /api/bot/events`：接收飞书事件订阅推送（消息接收、卡片回调、URL 验证）
+
+Bot 完整交互流程参见下方「飞书 Bot 使用说明」。
+
 ### scanservjs 代理
 
 - `ANY /sane-api/*`：反向代理到 `sane_api.target_url`（默认 `http://192.168.101.37:8080`）
@@ -141,6 +150,76 @@ docker exec sast-office-converter sh -lc "fc-list | wc -l"
     - `sane_api.auth_enabled: true` 时，鉴权失败直接拒绝（`401`）
     - 优先校验 `sane_api.auth_header` / `Authorization: Bearer` 是否匹配 `sane_api.auth_token`
     - 若未配置 `sane_api.auth_token` 且 `auth.enabled: true`，则走全局飞书 Bearer 鉴权
+
+## 飞书 Bot 使用说明
+
+飞书 Bot 支持用户在群聊（@Bot）或私聊中发送文件/云文档链接，通过消息卡片配置打印参数后提交打印。
+
+### 启用 Bot
+
+1. 在飞书开放平台 → 应用 → 添加「机器人」和「事件订阅」能力
+2. 事件订阅配置：
+   - 请求网址：`https://<你的域名>/api/bot/events`
+   - 订阅事件：`im.message.receive_v1`、`card.action.trigger`
+3. 在 `config.yaml` 中配置：
+
+```yaml
+bot:
+  enabled: true
+  verification_token: "与飞书后台一致"
+  encrypt_key: ""                         # 若开启事件加密则填写
+  bot_name: "GoPrint"
+  card_timeout: 10m
+  work_dir: /tmp/bot-files
+```
+
+### 交互流程
+
+```
+用户 @Bot 发送文件 / 链接
+       ↓
+Bot 回复参数配置卡片（打印机、份数、页码范围、缩印、单双面）
+       ↓
+用户修改参数 → 点击「开始打印」
+       ↓
+Bot 提交打印任务 → 保存记录到多维表格
+```
+
+手动双面时，第一面打印完成后 Bot 会推送「翻面继续」卡片。
+
+### 事件解密
+
+飞书支持 AES-256-CBC 加密事件推送。配置 `bot.encrypt_key` 后，系统自动解密。解密算法：
+
+- 密钥：`SHA256(encrypt_key)`
+- 模式：AES-256-CBC，IV 为密文前 16 字节
+- 填充：PKCS7
+
+### 所需权限
+
+| 权限 | 用途 |
+|------|------|
+| `im:message` | 发送消息/卡片 |
+| `im:message:read` | 接收用户消息 |
+| `im:resource` | 下载用户发送的文件 |
+| `drive:export` | 导出飞书文档为 PDF |
+| `bitable:app` | 读写打印记录到多维表格 |
+
+### 默认打印参数
+
+通过 `file_type_defaults` 按文件扩展名配置 Bot 场景下的默认打印参数：
+
+```yaml
+file_type_defaults:
+  pdf:
+    copies: 1
+    duplex: auto
+    nup: 1
+    collate: true
+    direction: horizontal
+  docx:
+    $ref: pdf    # 引用 pdf 的配置
+```
 
 ## 示例请求
 
@@ -163,11 +242,13 @@ curl -sS -X POST http://localhost:5001/api/jobs \
 - `duplex=true|false`：是否启用双面打印（默认 `false`）
 - `copies=整数`：打印份数（默认 `1`）
 - `collate=true|false`：份数排列方式（默认 `true`）
+- `nup=1|2|4|6`：每版打印页数/缩印（默认 `1`，即不缩印）
+- `pages=页码范围`：指定打印页，如 `"1-5,10"`（默认全部）
 
-示例（双面 + 2 份）：
+示例（双面 + 2-up 缩印）：
 
 ```bash
-curl -sS -X POST "http://localhost:5001/api/jobs?duplex=true&copies=2" \
+curl -sS -X POST "http://localhost:5001/api/jobs?duplex=true&nup=2" \
     -F printer_id=sast-color-printer \
     -F file=@printer_test.pdf
 ```
