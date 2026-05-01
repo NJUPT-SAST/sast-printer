@@ -395,9 +395,9 @@ func SubmitPrintJob(c *gin.Context) {
 	nup := 1
 	if rawNup := strings.TrimSpace(c.Query("nup")); rawNup != "" {
 		parsedNup, err := strconv.Atoi(rawNup)
-		if err != nil || (parsedNup != 1 && parsedNup != 2 && parsedNup != 4) {
+		if err != nil || (parsedNup != 1 && parsedNup != 2 && parsedNup != 4 && parsedNup != 6) {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "nup must be 1, 2, or 4",
+				"error": "nup must be 1, 2, 4, or 6",
 			})
 			return
 		}
