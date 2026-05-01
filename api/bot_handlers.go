@@ -112,7 +112,7 @@ func buildPrintConfigCard(filename string, totalPages int, printers []printerOpt
 
 	card := map[string]interface{}{
 		"schema": "2.0",
-		"config": map[string]interface{}{"wide_screen_mode": "AUTO"},
+		"config": map[string]interface{}{},
 		"header": map[string]interface{}{
 			"title": map[string]interface{}{
 				"tag":     "plain_text",
@@ -263,7 +263,7 @@ func sendCard(ctx context.Context, cfg *config.Config, chatID, receiveIDType, ca
 
 func sendTextMsg(ctx context.Context, cfg *config.Config, chatID, receiveIDType, text string) error {
 	escaped, _ := json.Marshal(text)
-	card := fmt.Sprintf(`{"schema":"2.0","config":{"wide_screen_mode":"AUTO"},"body":{"elements":[{"tag":"div","element_id":"msg","text":{"tag":"lark_md","content":%s}}]}}`, escaped)
+	card := fmt.Sprintf(`{"schema":"2.0","config":{},"body":{"elements":[{"tag":"div","element_id":"msg","text":{"tag":"lark_md","content":%s}}]}}`, escaped)
 	return sendCard(ctx, cfg, chatID, receiveIDType, card)
 }
 
@@ -709,7 +709,7 @@ func persistBotJob(cfg *config.Config, jobID, printerID, filename string, copies
 func buildJobSubmittedCard(jobID, printerID, filename string, copies int, duplex string) (string, error) {
 	card := map[string]interface{}{
 		"schema": "2.0",
-		"config": map[string]interface{}{"wide_screen_mode": "AUTO"},
+		"config": map[string]interface{}{},
 		"header": map[string]interface{}{
 			"title": map[string]interface{}{
 				"tag":     "plain_text",
@@ -746,7 +746,7 @@ func buildJobSubmittedCard(jobID, printerID, filename string, copies int, duplex
 func buildDuplexContinueCard(token string) (string, error) {
 	card := map[string]interface{}{
 		"schema": "2.0",
-		"config": map[string]interface{}{"wide_screen_mode": "AUTO"},
+		"config": map[string]interface{}{},
 		"header": map[string]interface{}{
 			"title": map[string]interface{}{
 				"tag":     "plain_text",
