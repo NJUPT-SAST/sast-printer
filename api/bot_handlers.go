@@ -282,6 +282,15 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 	chatType := ptrStr(msg.ChatType)
 	msgType := ptrStr(msg.MessageType)
 	contentJSON := ptrStr(msg.Content)
+
+	// For p2p chats, reply via sender's open_id; for group chats, reply via chat_id.
+	if chatType == "p2p" {
+		if event.Event.Sender != nil && event.Event.Sender.SenderId != nil {
+			if sid := ptrStr(event.Event.Sender.SenderId.OpenId); sid != "" {
+				chatID = sid
+			}
+		}
+	}
 	idType := receiveIDType(chatType)
 
 	var content struct {
