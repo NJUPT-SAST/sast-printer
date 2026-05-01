@@ -22,6 +22,7 @@ import (
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
+	larkcardkit "github.com/larksuite/oapi-sdk-go/v3/service/cardkit/v1"
 )
 
 var botDispatcher *dispatcher.EventDispatcher
@@ -110,67 +111,83 @@ func buildPrintConfigCard(filename string, totalPages int, printers []printerOpt
 	}
 
 	card := map[string]interface{}{
-		"config": map[string]interface{}{"wide_screen_mode": true},
+		"schema": "2.0",
+		"config": map[string]interface{}{"wide_screen_mode": "AUTO"},
 		"header": map[string]interface{}{
 			"title": map[string]interface{}{
 				"tag":     "plain_text",
 				"content": "🖨️ 打印配置",
 			},
 		},
-		"elements": []interface{}{
-			map[string]interface{}{
-				"tag": "div",
-				"text": map[string]interface{}{
-					"tag":     "lark_md",
-					"content": fmt.Sprintf("📄 **%s**　共 %d 页", filename, totalPages),
-				},
-			},
-			map[string]interface{}{
-				"tag":         "select_static",
-				"placeholder": map[string]interface{}{"tag": "plain_text", "content": "选择打印机"},
-				"options":     printerOpts,
-				"value":       map[string]interface{}{"printer_id": printers[0].ID},
-			},
-			map[string]interface{}{
-				"tag":   "input",
-				"label": map[string]interface{}{"tag": "plain_text", "content": "份数"},
-				"value": map[string]interface{}{"copies": fmt.Sprintf("%d", copies)},
-			},
-			map[string]interface{}{
-				"tag":   "input",
-				"label": map[string]interface{}{"tag": "plain_text", "content": "页码范围"},
-				"value": map[string]interface{}{"pages": fmt.Sprintf("1-%d", totalPages)},
-			},
-			map[string]interface{}{
-				"tag":         "select_static",
-				"placeholder": map[string]interface{}{"tag": "plain_text", "content": "缩印"},
-				"options":     nupOptions,
-				"value":       map[string]interface{}{"nup": fmt.Sprintf("%d", nup)},
-			},
-			map[string]interface{}{
-				"tag":         "select_static",
-				"placeholder": map[string]interface{}{"tag": "plain_text", "content": "单双面"},
-				"options":     duplexOptions,
-				"value":       map[string]interface{}{"duplex": duplex},
-			},
-			map[string]interface{}{"tag": "hr"},
-			map[string]interface{}{
-				"tag": "action",
-				"actions": []interface{}{
-					map[string]interface{}{
-						"tag":   "button",
-						"text":  map[string]interface{}{"tag": "plain_text", "content": "取消"},
-						"type":  "default",
-						"value": map[string]interface{}{"action": "cancel"},
+		"body": map[string]interface{}{
+			"elements": []interface{}{
+				map[string]interface{}{
+					"tag":        "div",
+					"element_id": "file_info",
+					"text": map[string]interface{}{
+						"tag":     "lark_md",
+						"content": fmt.Sprintf("📄 **%s**　共 %d 页", filename, totalPages),
 					},
-					map[string]interface{}{
-						"tag":   "button",
-						"text":  map[string]interface{}{"tag": "plain_text", "content": "开始打印"},
-						"type":  "primary",
-						"value": map[string]interface{}{"action": "print", "session_id": sessionID},
-						"confirm": map[string]interface{}{
-							"title": map[string]interface{}{"tag": "plain_text", "content": "确认打印？"},
-							"text":  map[string]interface{}{"tag": "plain_text", "content": "将按所选参数提交打印任务"},
+				},
+				map[string]interface{}{
+					"tag":         "select_static",
+					"element_id":  "printer_select",
+					"placeholder": map[string]interface{}{"tag": "plain_text", "content": "选择打印机"},
+					"options":     printerOpts,
+					"value":       map[string]interface{}{"printer_id": printers[0].ID},
+				},
+				map[string]interface{}{
+					"tag":        "input",
+					"element_id": "copies_input",
+					"label":      map[string]interface{}{"tag": "plain_text", "content": "份数"},
+					"value":      map[string]interface{}{"copies": fmt.Sprintf("%d", copies)},
+				},
+				map[string]interface{}{
+					"tag":        "input",
+					"element_id": "pages_input",
+					"label":      map[string]interface{}{"tag": "plain_text", "content": "页码范围"},
+					"value":      map[string]interface{}{"pages": fmt.Sprintf("1-%d", totalPages)},
+				},
+				map[string]interface{}{
+					"tag":         "select_static",
+					"element_id":  "nup_select",
+					"placeholder": map[string]interface{}{"tag": "plain_text", "content": "缩印"},
+					"options":     nupOptions,
+					"value":       map[string]interface{}{"nup": fmt.Sprintf("%d", nup)},
+				},
+				map[string]interface{}{
+					"tag":         "select_static",
+					"element_id":  "duplex_select",
+					"placeholder": map[string]interface{}{"tag": "plain_text", "content": "单双面"},
+					"options":     duplexOptions,
+					"value":       map[string]interface{}{"duplex": duplex},
+				},
+				map[string]interface{}{"tag": "hr", "element_id": "divider"},
+				map[string]interface{}{
+					"tag":        "action",
+					"element_id": "print_actions",
+					"actions": []interface{}{
+						map[string]interface{}{
+							"tag":        "button",
+							"element_id": "cancel_btn",
+							"text":       map[string]interface{}{"tag": "plain_text", "content": "取消"},
+							"type":       "default",
+							"behaviors": []interface{}{
+								map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "cancel"}},
+							},
+						},
+						map[string]interface{}{
+							"tag":        "button",
+							"element_id": "print_btn",
+							"text":       map[string]interface{}{"tag": "plain_text", "content": "开始打印"},
+							"type":       "primary",
+							"behaviors": []interface{}{
+								map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "print", "session_id": sessionID}},
+							},
+							"confirm": map[string]interface{}{
+								"title": map[string]interface{}{"tag": "plain_text", "content": "确认打印？"},
+								"text":  map[string]interface{}{"tag": "plain_text", "content": "将按所选参数提交打印任务"},
+							},
 						},
 					},
 				},
@@ -202,12 +219,35 @@ func sendCard(ctx context.Context, cfg *config.Config, chatID, receiveIDType, ca
 		return err
 	}
 
+	// Step 1: Create card entity via CardKit API
+	cardReq := larkcardkit.NewCreateCardReqBuilder().
+		Body(larkcardkit.NewCreateCardReqBodyBuilder().
+			Type("card_json").
+			Data(cardJSON).
+			Build()).
+		Build()
+
+	cardResp, err := client.Cardkit.V1.Card.Create(ctx, cardReq)
+	if err != nil {
+		return fmt.Errorf("cardkit create: %w", err)
+	}
+	if !cardResp.Success() {
+		return fmt.Errorf("cardkit create error: code=%d msg=%s", cardResp.Code, cardResp.Msg)
+	}
+	cardID := *cardResp.Data.CardId
+
+	// Step 2: Send message with card_id
+	content, _ := json.Marshal(map[string]string{
+		"type":    "card_id",
+		"card_id": cardID,
+	})
+
 	req := larkim.NewCreateMessageReqBuilder().
 		ReceiveIdType(receiveIDType).
 		Body(larkim.NewCreateMessageReqBodyBuilder().
 			ReceiveId(chatID).
 			MsgType("interactive").
-			Content(cardJSON).
+			Content(string(content)).
 			Build()).
 		Build()
 
@@ -223,7 +263,7 @@ func sendCard(ctx context.Context, cfg *config.Config, chatID, receiveIDType, ca
 
 func sendTextMsg(ctx context.Context, cfg *config.Config, chatID, receiveIDType, text string) error {
 	escaped, _ := json.Marshal(text)
-	card := fmt.Sprintf(`{"config":{"wide_screen_mode":true},"elements":[{"tag":"div","text":{"tag":"lark_md","content":%s}}]}`, escaped)
+	card := fmt.Sprintf(`{"schema":"2.0","config":{"wide_screen_mode":"AUTO"},"body":{"elements":[{"tag":"div","element_id":"msg","text":{"tag":"lark_md","content":%s}}]}}`, escaped)
 	return sendCard(ctx, cfg, chatID, receiveIDType, card)
 }
 
@@ -317,6 +357,31 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 			return
 		}
 		sourcePath, filename, cleanup = path, fn, cl
+
+		// Convert office docs and images to PDF (same pipeline as web flow)
+		if isOfficeConvertible(cfg, filename) {
+			pdfPath, convErr := convertOfficeToPDF(context.Background(), cfg, sourcePath)
+			if convErr != nil {
+				log.Printf("[bot] office convert failed: %v", convErr)
+				_ = sendTextMsg(context.Background(), cfg, chatID, idType, "文档转换失败，请确保文件格式正确")
+				cleanup()
+				return
+			}
+			oldCleanup := cleanup
+			sourcePath = pdfPath
+			cleanup = func() { _ = os.Remove(pdfPath); oldCleanup() }
+		} else if isImageConvertible(filename) {
+			pdfPath, convErr := convertImageToPDF(cfg, sourcePath)
+			if convErr != nil {
+				log.Printf("[bot] image convert failed: %v", convErr)
+				_ = sendTextMsg(context.Background(), cfg, chatID, idType, "图片转换失败")
+				cleanup()
+				return
+			}
+			oldCleanup := cleanup
+			sourcePath = pdfPath
+			cleanup = func() { _ = os.Remove(pdfPath); oldCleanup() }
+		}
 
 	case "text":
 		raw := strings.TrimSpace(content.Text)
@@ -643,28 +708,33 @@ func persistBotJob(cfg *config.Config, jobID, printerID, filename string, copies
 
 func buildJobSubmittedCard(jobID, printerID, filename string, copies int, duplex string) (string, error) {
 	card := map[string]interface{}{
-		"config": map[string]interface{}{"wide_screen_mode": true},
+		"schema": "2.0",
+		"config": map[string]interface{}{"wide_screen_mode": "AUTO"},
 		"header": map[string]interface{}{
 			"title": map[string]interface{}{
 				"tag":     "plain_text",
 				"content": "打印任务已提交",
 			},
 		},
-		"elements": []interface{}{
-			map[string]interface{}{
-				"tag": "div",
-				"fields": []interface{}{
-					map[string]interface{}{"is_short": true, "text": map[string]interface{}{"tag": "lark_md", "content": "**文件**\n" + filename}},
-					map[string]interface{}{"is_short": true, "text": map[string]interface{}{"tag": "lark_md", "content": "**打印机**\n" + printerID}},
-					map[string]interface{}{"is_short": true, "text": map[string]interface{}{"tag": "lark_md", "content": "**份数**\n" + strconv.Itoa(copies)}},
-					map[string]interface{}{"is_short": true, "text": map[string]interface{}{"tag": "lark_md", "content": "**模式**\n" + duplex}},
+		"body": map[string]interface{}{
+			"elements": []interface{}{
+				map[string]interface{}{
+					"tag":        "div",
+					"element_id": "job_info",
+					"fields": []interface{}{
+						map[string]interface{}{"is_short": true, "text": map[string]interface{}{"tag": "lark_md", "content": "**文件**\n" + filename}},
+						map[string]interface{}{"is_short": true, "text": map[string]interface{}{"tag": "lark_md", "content": "**打印机**\n" + printerID}},
+						map[string]interface{}{"is_short": true, "text": map[string]interface{}{"tag": "lark_md", "content": "**份数**\n" + strconv.Itoa(copies)}},
+						map[string]interface{}{"is_short": true, "text": map[string]interface{}{"tag": "lark_md", "content": "**模式**\n" + duplex}},
+					},
 				},
-			},
-			map[string]interface{}{"tag": "hr"},
-			map[string]interface{}{
-				"tag": "note",
-				"elements": []interface{}{
-					map[string]interface{}{"tag": "plain_text", "content": "任务 ID: " + jobID},
+				map[string]interface{}{"tag": "hr", "element_id": "divider"},
+				map[string]interface{}{
+					"tag":        "note",
+					"element_id": "job_id_note",
+					"elements": []interface{}{
+						map[string]interface{}{"tag": "plain_text", "content": "任务 ID: " + jobID},
+					},
 				},
 			},
 		},
@@ -675,34 +745,46 @@ func buildJobSubmittedCard(jobID, printerID, filename string, copies int, duplex
 
 func buildDuplexContinueCard(token string) (string, error) {
 	card := map[string]interface{}{
+		"schema": "2.0",
+		"config": map[string]interface{}{"wide_screen_mode": "AUTO"},
 		"header": map[string]interface{}{
 			"title": map[string]interface{}{
 				"tag":     "plain_text",
 				"content": "🔄 手动双面打印",
 			},
 		},
-		"elements": []interface{}{
-			map[string]interface{}{
-				"tag": "div",
-				"text": map[string]interface{}{
-					"tag":     "lark_md",
-					"content": "第一面已完成。请取出纸张**翻面**后放回纸盒，点击继续。",
-				},
-			},
-			map[string]interface{}{
-				"tag": "action",
-				"actions": []interface{}{
-					map[string]interface{}{
-						"tag":   "button",
-						"text":  map[string]interface{}{"tag": "plain_text", "content": "取消剩余"},
-						"type":  "default",
-						"value": map[string]interface{}{"action": "cancel_duplex", "token": token},
+		"body": map[string]interface{}{
+			"elements": []interface{}{
+				map[string]interface{}{
+					"tag":        "div",
+					"element_id": "duplex_msg",
+					"text": map[string]interface{}{
+						"tag":     "lark_md",
+						"content": "第一面已完成。请取出纸张**翻面**后放回纸盒，点击继续。",
 					},
-					map[string]interface{}{
-						"tag":   "button",
-						"text":  map[string]interface{}{"tag": "plain_text", "content": "已翻面，继续打印"},
-						"type":  "primary",
-						"value": map[string]interface{}{"action": "continue_duplex", "token": token},
+				},
+				map[string]interface{}{
+					"tag":        "action",
+					"element_id": "duplex_actions",
+					"actions": []interface{}{
+						map[string]interface{}{
+							"tag":        "button",
+							"element_id": "cancel_duplex_btn",
+							"text":       map[string]interface{}{"tag": "plain_text", "content": "取消剩余"},
+							"type":       "default",
+							"behaviors": []interface{}{
+								map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "cancel_duplex", "token": token}},
+							},
+						},
+						map[string]interface{}{
+							"tag":        "button",
+							"element_id": "continue_duplex_btn",
+							"text":       map[string]interface{}{"tag": "plain_text", "content": "已翻面，继续打印"},
+							"type":       "primary",
+							"behaviors": []interface{}{
+								map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "continue_duplex", "token": token}},
+							},
+						},
 					},
 				},
 			},
