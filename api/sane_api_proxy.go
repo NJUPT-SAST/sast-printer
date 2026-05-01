@@ -69,11 +69,11 @@ func SaneAPIProxy() gin.HandlerFunc {
 func rewriteProxyLocation(location string, target *url.URL) (string, bool) {
 	const prefix = "/sane-api"
 
-	if isUnsafeRedirectPathPrefix(location) {
-		return prefix + "/", true
-	}
-
 	if strings.HasPrefix(location, "/") {
+		// Reject // and /\ prefix to prevent open redirect (e.g. //evil.com)
+		if isUnsafeRedirectPathPrefix(location) {
+			return prefix + "/", true
+		}
 		suffix := strings.TrimPrefix(location, prefix)
 		if suffix != location && isUnsafeRedirectPathPrefix(suffix) {
 			return prefix + "/", true
