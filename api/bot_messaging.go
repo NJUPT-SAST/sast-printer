@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	larkcardkit "github.com/larksuite/oapi-sdk-go/v3/service/cardkit/v1"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
@@ -105,24 +106,29 @@ func notifyUserCard(ctx context.Context, cfg *config.Config, openID, cardJSON st
 func disableCardButtons(ctx context.Context, cfg *config.Config, cardID string) {
 	client, err := newFeishuClient(cfg)
 	if err != nil {
-		log.Printf("[bot] patch card: %v", err)
+		log.Printf("[bot] update card: %v", err)
 		return
 	}
+	seq := int(time.Now().Unix())
 	for _, el := range []string{"print_btn", "cancel_btn"} {
-		patch := `{"disabled":true}`
+		var element string
 		if el == "print_btn" {
-			patch = `{"disabled":true,"text":{"tag":"plain_text","content":"处理中..."}}`
+			element = `{"tag":"button","element_id":"print_btn","text":{"tag":"plain_text","content":"处理中..."},"type":"primary_filled","form_action_type":"submit","name":"print_btn","disabled":true}`
+		} else {
+			element = `{"tag":"button","element_id":"cancel_btn","text":{"tag":"plain_text","content":"取消"},"type":"default","disabled":true}`
 		}
-		req := larkcardkit.NewPatchCardElementReqBuilder().
+		seq++
+		req := larkcardkit.NewUpdateCardElementReqBuilder().
 			CardId(cardID).
 			ElementId(el).
-			Body(larkcardkit.NewPatchCardElementReqBodyBuilder().
-				PartialElement(patch).
+			Body(larkcardkit.NewUpdateCardElementReqBodyBuilder().
+				Element(element).
+				Sequence(seq).
 				Build()).
 			Build()
-		_, err := client.Cardkit.V1.CardElement.Patch(ctx, req)
+		_, err := client.Cardkit.V1.CardElement.Update(ctx, req)
 		if err != nil {
-			log.Printf("[bot] patch card element %s: %v", el, err)
+			log.Printf("[bot] update card element %s: %v", el, err)
 		}
 	}
 }
