@@ -296,6 +296,14 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 
 	printSourcePath := session.SourcePath
 
+	if session.CardID != "" {
+		if err := disableCardButtons(context.Background(), cfg, session.CardID); err != nil {
+			log.Printf("[bot] disable card buttons card=%s: %v", session.CardID, err)
+		}
+	} else {
+		log.Printf("[bot] cardID is empty, skip disableButtons session=%s", sessionID)
+	}
+
 	// Page selection
 	pageCleanup := func() {}
 	if pagesStr != "" {
@@ -387,9 +395,6 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		}
 
 		persistBotJob(cfg, jobID, printerID, session.Filename, copies, true, openID)
-		if session.CardID != "" {
-			go disableCardButtons(context.Background(), cfg, session.CardID)
-		}
 		_ = os.Remove(session.SourcePath)
 		deleteBotSession(sessionID)
 		return
@@ -427,9 +432,6 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	}
 
 	persistBotJob(cfg, jobID, printerID, session.Filename, copies, duplexMode != "off", openID)
-	if session.CardID != "" {
-		go disableCardButtons(context.Background(), cfg, session.CardID)
-	}
 	_ = os.Remove(session.SourcePath)
 	deleteBotSession(sessionID)
 	log.Printf("[bot] print job submitted: job_id=%s printer=%s duplex=%s", jobID, printerID, duplexMode)

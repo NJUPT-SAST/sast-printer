@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -55,7 +56,9 @@ func startBotSessionCleaner() {
 			botSessionsMu.Unlock()
 			cfg := getConfig()
 			for _, cardID := range expiredCardIDs {
-				go disableCardButtons(context.Background(), cfg, cardID)
+				if err := disableCardButtons(context.Background(), cfg, cardID); err != nil {
+					log.Printf("[bot] session cleaner disable buttons card=%s: %v", cardID, err)
+				}
 			}
 		}
 	}()
