@@ -25,16 +25,17 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 	chatType := ptrStr(msg.ChatType)
 	msgType := ptrStr(msg.MessageType)
 	contentJSON := ptrStr(msg.Content)
+	requesterOpenID := ""
+	if event.Event.Sender != nil && event.Event.Sender.SenderId != nil {
+		requesterOpenID = ptrStr(event.Event.Sender.SenderId.OpenId)
+	}
 
 	// For p2p chats, reply via sender's open_id; for group chats, reply via chat_id.
 	if chatType == "p2p" {
-		if event.Event.Sender != nil && event.Event.Sender.SenderId != nil {
-			if sid := ptrStr(event.Event.Sender.SenderId.OpenId); sid != "" {
-				chatID = sid
-			}
+		if requesterOpenID != "" {
+			chatID = requesterOpenID
 		}
 	}
-	idType := receiveIDType(chatType)
 	messageID := ptrStr(msg.MessageId)
 
 	var content struct {
@@ -43,7 +44,7 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 		Text     string `json:"text"`
 	}
 	if err := json.Unmarshal([]byte(contentJSON), &content); err != nil {
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "无法解析消息", messageID)
+		_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, "无法解析消息", messageID)
 		return
 	}
 
@@ -55,13 +56,13 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 	switch msgType {
 	case "file":
 		if !isSupportedUploadFile(cfg, content.FileName) {
-			_ = sendTextMsg(context.Background(), cfg, chatID, idType, "不支持的文件类型，请发送 PDF、Office 文档（doc/docx/ppt/pptx）或图片（jpg/png）", messageID)
+			_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, "不支持的文件类型，请发送 PDF、Office 文档（doc/docx/ppt/pptx）或图片（jpg/png）", messageID)
 			return
 		}
 		path, fn, cl, err := downloadBotFile(context.Background(), cfg, ptrStr(msg.MessageId), content.FileKey, content.FileName)
 		if err != nil {
 			log.Printf("[bot] download file failed: %v", err)
-			_ = sendTextMsg(context.Background(), cfg, chatID, idType, fmt.Sprintf("下载文件失败：%v", err), messageID)
+			_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, fmt.Sprintf("下载文件失败：%v", err), messageID)
 			return
 		}
 		sourcePath, filename, cleanup = path, fn, cl
@@ -71,7 +72,7 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 			pdfPath, convErr := convertOfficeToPDF(context.Background(), cfg, sourcePath)
 			if convErr != nil {
 				log.Printf("[bot] office convert failed: %v", convErr)
-				_ = sendTextMsg(context.Background(), cfg, chatID, idType, "文档转换失败，请确保文件格式正确", messageID)
+				_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, "文档转换失败，请确保文件格式正确", messageID)
 				cleanup()
 				return
 			}
@@ -82,7 +83,7 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 			pdfPath, convErr := convertImageToPDF(cfg, sourcePath)
 			if convErr != nil {
 				log.Printf("[bot] image convert failed: %v", convErr)
-				_ = sendTextMsg(context.Background(), cfg, chatID, idType, "图片转换失败", messageID)
+				_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, "图片转换失败", messageID)
 				cleanup()
 				return
 			}
@@ -98,12 +99,12 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 		}
 		client, cliErr := newFeishuClient(cfg)
 		if cliErr != nil {
-			_ = sendTextMsg(context.Background(), cfg, chatID, idType, "内部错误", messageID)
+			_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, "内部错误", messageID)
 			return
 		}
 		pdfPath, docFilename, exportErr := exportFeishuDocToPDF(context.Background(), client, "", raw)
 		if exportErr != nil {
-			_ = sendTextMsg(context.Background(), cfg, chatID, idType, fmt.Sprintf("导出失败：%v", exportErr), messageID)
+			_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, fmt.Sprintf("导出失败：%v", exportErr), messageID)
 			return
 		}
 		sourcePath, filename = pdfPath, docFilename
@@ -111,7 +112,7 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 		isCloudDoc = true
 
 	default:
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "请发送 PDF/Office 文档/图片文件，或飞书云文档链接", messageID)
+		_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, "请发送 PDF/Office 文档/图片文件，或飞书云文档链接", messageID)
 		return
 	}
 	defer func() {
@@ -122,7 +123,7 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 
 	pages, err := countPDFPages(sourcePath)
 	if err != nil {
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "无法读取文件页数", messageID)
+		_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, "无法读取文件页数", messageID)
 		return
 	}
 
@@ -132,7 +133,7 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 	}
 	printers := buildPrinterOptions(cfg)
 	if len(printers) == 0 {
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "没有可用的打印机", messageID)
+		_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, "没有可用的打印机", messageID)
 		return
 	}
 
@@ -140,32 +141,34 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 
 	card, err := buildPrintConfigCard(filename, pages, printers, defaults, sessionID)
 	if err != nil {
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "构建卡片失败", messageID)
+		_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, "构建卡片失败", messageID)
 		return
 	}
 
-	cardID, err := sendCard(context.Background(), cfg, chatID, idType, card, messageID)
+	delivery, err := sendBotCard(context.Background(), cfg, chatID, chatType, requesterOpenID, card, messageID)
 	if err != nil {
 		log.Printf("[bot] send card failed: %v", err)
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "发送卡片失败，请重试", messageID)
+		_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, "发送卡片失败，请重试", messageID)
 		return
 	}
 
 	persistedPath, persistErr := persistSessionFile(sourcePath)
 	if persistErr != nil {
 		log.Printf("[bot] persist session file: %v", persistErr)
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "保存文件失败，请重试", messageID)
+		_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, "保存文件失败，请重试", messageID)
 		return
 	}
 	saveBotSession(sessionID, botCardSession{
-		ReplyMessageID: messageID,
-		SourcePath:     persistedPath,
-		Filename:       filename,
-		PrinterID:      printers[0].ID,
-		ChatID:         chatID,
-		CardID:         cardID,
-		ChatType:       chatType,
-		CreatedAt:      time.Now(),
+		ReplyMessageID:     messageID,
+		SourcePath:         persistedPath,
+		Filename:           filename,
+		PrinterID:          printers[0].ID,
+		ChatID:             chatID,
+		RequesterOpenID:    requesterOpenID,
+		CardID:             delivery.CardID,
+		EphemeralMessageID: delivery.EphemeralMessageID,
+		ChatType:           chatType,
+		CreatedAt:          time.Now(),
 	})
 }
 
@@ -226,7 +229,7 @@ func processCardAction(cfg *config.Config, event *callback.CardActionTriggerEven
 	case "continue_duplex":
 		handleBotDuplexContinue(cfg, values, openID)
 	case "cancel_duplex":
-		handleBotDuplexCancel(cfg, values)
+		handleBotDuplexCancel(cfg, values, openID)
 	}
 }
 
@@ -234,11 +237,13 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	sessionID := cardStr(values, "session_id")
 	session, ok := getBotSession(sessionID)
 	if !ok {
-		// sessionID is "chatID-timestamp", extract chatID for error reply
-		if idx := strings.LastIndex(sessionID, "-"); idx > 0 {
-			_ = sendTextMsg(context.Background(), cfg, sessionID[:idx], "open_id", "会话已过期，请重新发送文件", "")
-		}
 		log.Printf("[bot] card session expired or not found: %s", sessionID)
+		return
+	}
+	if session.RequesterOpenID != "" && openID != "" && openID != session.RequesterOpenID {
+		log.Printf("[bot] reject card action from non-requester session=%s requester=%s operator=%s",
+			sessionID, maskSensitive(session.RequesterOpenID), maskSensitive(openID))
+		_ = sendBotText(context.Background(), cfg, session.ChatID, session.ChatType, openID, "这张打印卡片不属于你，请由发起人确认。", "")
 		return
 	}
 
@@ -263,26 +268,26 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 
 	// Validate inputs; re-send config card with error hint on invalid input
 	if printerID == "" {
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "请选择打印机", replyMsgID)
+		_ = sendSessionText(context.Background(), cfg, session, "请选择打印机")
 		return
 	}
 	if copies < 1 || copies > 99 {
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "份数必须为 1-99", replyMsgID)
+		_ = sendSessionText(context.Background(), cfg, session, "份数必须为 1-99")
 		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
 		return
 	}
 	if !isValidPages(pagesStr) {
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "页码范围格式无效（如 1-5,7,9-12）", replyMsgID)
+		_ = sendSessionText(context.Background(), cfg, session, "页码范围格式无效（如 1-5,7,9-12）")
 		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
 		return
 	}
 	if nup != 1 && !validNup(nup) {
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "无效的缩印选项（支持 1/2/4/6）", replyMsgID)
+		_ = sendSessionText(context.Background(), cfg, session, "无效的缩印选项（支持 1/2/4/6）")
 		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
 		return
 	}
 	if duplex != "off" && duplex != "auto" && duplex != "manual" {
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "无效的双面选项", replyMsgID)
+		_ = sendSessionText(context.Background(), cfg, session, "无效的双面选项")
 		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
 		return
 	}
@@ -290,7 +295,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	printerCfg, err := resolvePrinter(printerID)
 	if err != nil {
 		log.Printf("[bot] resolve printer %s: %v", printerID, err)
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "打印机配置错误", replyMsgID)
+		_ = sendSessionText(context.Background(), cfg, session, "打印机配置错误")
 		return
 	}
 
@@ -299,6 +304,10 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	if session.CardID != "" {
 		if err := disableCardButtons(context.Background(), cfg, session.CardID); err != nil {
 			log.Printf("[bot] disable card buttons card=%s: %v", session.CardID, err)
+		}
+	} else if session.EphemeralMessageID != "" {
+		if err := deleteEphemeralCard(context.Background(), cfg, session.EphemeralMessageID); err != nil {
+			log.Printf("[bot] delete ephemeral card message=%s: %v", session.EphemeralMessageID, err)
 		}
 	} else {
 		log.Printf("[bot] cardID is empty, skip disableButtons session=%s", sessionID)
@@ -310,7 +319,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		selectedPath, cleanupPages, err := extractPDFPages(printSourcePath, pagesStr)
 		if err != nil {
 			log.Printf("[bot] extract pages pagesStr=%q source=%s: %v", pagesStr, printSourcePath, err)
-			_ = sendTextMsg(context.Background(), cfg, chatID, idType, fmt.Sprintf("页码范围提取失败：%v", err), replyMsgID)
+			_ = sendSessionText(context.Background(), cfg, session, fmt.Sprintf("页码范围提取失败：%v", err))
 			return
 		}
 		printSourcePath = selectedPath
@@ -324,7 +333,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		nupPath, cleanupNup, err := applyNupLayout(printSourcePath, nup)
 		if err != nil {
 			log.Printf("[bot] nup: %v", err)
-			_ = sendTextMsg(context.Background(), cfg, chatID, idType, "缩印排版失败", replyMsgID)
+			_ = sendSessionText(context.Background(), cfg, session, "缩印排版失败")
 			return
 		}
 		if nupPath != printSourcePath {
@@ -337,7 +346,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	cupsClient, printerName, err := newCupsClientForPrinter(printerCfg)
 	if err != nil {
 		log.Printf("[bot] cups client: %v", err)
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "打印机连接失败", replyMsgID)
+		_ = sendSessionText(context.Background(), cfg, session, "打印机连接失败")
 		return
 	}
 
@@ -350,14 +359,14 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	}
 
 	if duplexMode != "off" && printerCfg.NormalizedDuplexMode() == "off" && duplex != "manual" {
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "该打印机不支持双面打印", replyMsgID)
+		_ = sendSessionText(context.Background(), cfg, session, "该打印机不支持双面打印")
 		return
 	}
 
 	finalPath, err := applyCopiesMode(printSourcePath, copies, true)
 	if err != nil {
 		log.Printf("[bot] copies: %v", err)
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "份数排版失败", replyMsgID)
+		_ = sendSessionText(context.Background(), cfg, session, "份数排版失败")
 		return
 	}
 	if finalPath != printSourcePath {
@@ -368,7 +377,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		firstPassPath, secondPassPath, cleanupDup, err := prepareManualDuplexFiles(finalPath, printerCfg)
 		if err != nil {
 			log.Printf("[bot] manual duplex prepare: %v", err)
-			_ = sendTextMsg(context.Background(), cfg, chatID, idType, "手动双面准备失败", replyMsgID)
+			_ = sendSessionText(context.Background(), cfg, session, "手动双面准备失败")
 			return
 		}
 		defer cleanupDup()
@@ -376,14 +385,14 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		jobID, err := cupsClient.SubmitJob(printerName, firstPassPath, cups.PrintOptions{Copies: 1})
 		if err != nil {
 			log.Printf("[bot] submit first pass: %v", err)
-			_ = sendTextMsg(context.Background(), cfg, chatID, idType, "手动双面提交失败", replyMsgID)
+			_ = sendSessionText(context.Background(), cfg, session, "手动双面提交失败")
 			return
 		}
 
 		token, _, err := saveManualDuplexPending(jobID, printerID, secondPassPath, 1, openID)
 		if err != nil {
 			log.Printf("[bot] save duplex pending: %v", err)
-			_ = sendTextMsg(context.Background(), cfg, chatID, idType, "保存双面任务失败", replyMsgID)
+			_ = sendSessionText(context.Background(), cfg, session, "保存双面任务失败")
 			return
 		}
 
@@ -391,7 +400,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		if err != nil {
 			log.Printf("[bot] build duplex card: %v", err)
 		} else {
-			_, _ = sendCard(context.Background(), cfg, chatID, idType, duplexCard, replyMsgID)
+			_, _ = sendBotCard(context.Background(), cfg, chatID, session.ChatType, session.RequesterOpenID, duplexCard, replyMsgID)
 		}
 
 		persistBotJob(cfg, jobID, printerID, session.Filename, copies, true, openID)
@@ -405,7 +414,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		reversedPath, reverseErr := prepareReversedPDF(finalPath)
 		if reverseErr != nil {
 			log.Printf("[bot] reverse pdf: %v", reverseErr)
-			_ = sendTextMsg(context.Background(), cfg, chatID, idType, "PDF逆序处理失败", replyMsgID)
+			_ = sendSessionText(context.Background(), cfg, session, "PDF逆序处理失败")
 			return
 		}
 		if reversedPath != finalPath {
@@ -427,7 +436,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	jobID, err := cupsClient.SubmitJob(printerName, printPath, printOpts)
 	if err != nil {
 		log.Printf("[bot] submit job: %v", err)
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, fmt.Sprintf("打印提交失败：%v", err), replyMsgID)
+		_ = sendSessionText(context.Background(), cfg, session, fmt.Sprintf("打印提交失败：%v", err))
 		return
 	}
 
@@ -444,7 +453,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	if err != nil {
 		log.Printf("[bot] build submitted card: %v", err)
 	} else {
-		_, _ = sendCard(context.Background(), cfg, chatID, idType, card, replyMsgID)
+		_, _ = sendBotCard(context.Background(), cfg, chatID, session.ChatType, session.RequesterOpenID, card, replyMsgID)
 	}
 }
 
@@ -477,6 +486,11 @@ func handleBotDuplexContinue(cfg *config.Config, values map[string]interface{}, 
 		log.Printf("[bot] duplex hook not found: %s", token)
 		return
 	}
+	if pending.OpenID != "" && openID != "" && openID != pending.OpenID {
+		log.Printf("[bot] reject duplex continue from non-requester token=%s requester=%s operator=%s",
+			token, maskSensitive(pending.OpenID), maskSensitive(openID))
+		return
+	}
 
 	printerCfg, err := resolvePrinter(pending.PrinterID)
 	if err != nil {
@@ -501,10 +515,15 @@ func handleBotDuplexContinue(cfg *config.Config, values map[string]interface{}, 
 	log.Printf("[bot] manual duplex continue: job_id=%s", jobID)
 }
 
-func handleBotDuplexCancel(cfg *config.Config, values map[string]interface{}) {
+func handleBotDuplexCancel(cfg *config.Config, values map[string]interface{}, openID string) {
 	token := cardStr(values, "token")
 	pending, ok := getManualDuplexPending(token)
 	if !ok {
+		return
+	}
+	if pending.OpenID != "" && openID != "" && openID != pending.OpenID {
+		log.Printf("[bot] reject duplex cancel from non-requester token=%s requester=%s operator=%s",
+			token, maskSensitive(pending.OpenID), maskSensitive(openID))
 		return
 	}
 	_ = os.Remove(pending.RemainingFilePath)

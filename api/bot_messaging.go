@@ -1,16 +1,25 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"strings"
 
 	larkcardkit "github.com/larksuite/oapi-sdk-go/v3/service/cardkit/v1"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 
 	"goprint/config"
 )
+
+type botCardDelivery struct {
+	CardID             string
+	EphemeralMessageID string
+}
 
 func ptrStr(s *string) string {
 	if s == nil {
@@ -93,6 +102,122 @@ func sendCard(ctx context.Context, cfg *config.Config, chatID, receiveIDType, ca
 	return cardID, nil
 }
 
+func sendEphemeralCard(ctx context.Context, cfg *config.Config, chatID, openID, cardJSON string) (string, error) {
+	chatID = strings.TrimSpace(chatID)
+	openID = strings.TrimSpace(openID)
+	if chatID == "" {
+		return "", fmt.Errorf("chat_id is required for ephemeral card")
+	}
+	if openID == "" {
+		return "", fmt.Errorf("open_id is required for ephemeral card")
+	}
+
+	var card map[string]interface{}
+	if err := json.Unmarshal([]byte(cardJSON), &card); err != nil {
+		return "", fmt.Errorf("parse card json: %w", err)
+	}
+
+	token, err := getFeishuTenantAccessToken(ctx, cfg)
+	if err != nil {
+		return "", err
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"chat_id":  chatID,
+		"open_id":  openID,
+		"msg_type": "interactive",
+		"card":     card,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://open.feishu.cn/open-apis/ephemeral/v1/send", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("build ephemeral card request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("send ephemeral card: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBytes, _ := io.ReadAll(resp.Body)
+	var result struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			MessageID string `json:"message_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respBytes, &result); err != nil {
+		return "", fmt.Errorf("parse ephemeral card response status=%d: %w", resp.StatusCode, err)
+	}
+	if result.Code != 0 {
+		return "", fmt.Errorf("ephemeral card error: code=%d msg=%s", result.Code, result.Msg)
+	}
+	if result.Data.MessageID == "" {
+		return "", fmt.Errorf("empty ephemeral message_id")
+	}
+	return result.Data.MessageID, nil
+}
+
+func deleteEphemeralCard(ctx context.Context, cfg *config.Config, messageID string) error {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return nil
+	}
+	token, err := getFeishuTenantAccessToken(ctx, cfg)
+	if err != nil {
+		return err
+	}
+
+	body, _ := json.Marshal(map[string]string{"message_id": messageID})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://open.feishu.cn/open-apis/ephemeral/v1/delete", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build delete ephemeral card request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("delete ephemeral card: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBytes, _ := io.ReadAll(resp.Body)
+	var result struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if err := json.Unmarshal(respBytes, &result); err != nil {
+		return fmt.Errorf("parse delete ephemeral card response status=%d: %w", resp.StatusCode, err)
+	}
+	if result.Code != 0 {
+		return fmt.Errorf("delete ephemeral card error: code=%d msg=%s", result.Code, result.Msg)
+	}
+	return nil
+}
+
+func sendBotCard(ctx context.Context, cfg *config.Config, chatID, chatType, visibleOpenID, cardJSON, messageID string) (botCardDelivery, error) {
+	if chatType != "p2p" {
+		if strings.TrimSpace(visibleOpenID) == "" {
+			return botCardDelivery{}, fmt.Errorf("open_id is required for private group bot card")
+		}
+		messageID, err := sendEphemeralCard(ctx, cfg, chatID, visibleOpenID, cardJSON)
+		if err != nil {
+			return botCardDelivery{}, err
+		}
+		return botCardDelivery{EphemeralMessageID: messageID}, nil
+	}
+
+	cardID, err := sendCard(ctx, cfg, chatID, receiveIDType(chatType), cardJSON, messageID)
+	if err != nil {
+		return botCardDelivery{}, err
+	}
+	return botCardDelivery{CardID: cardID}, nil
+}
+
 func notifyUserCard(ctx context.Context, cfg *config.Config, openID, cardJSON string) {
 	cardID, err := sendCard(ctx, cfg, openID, "open_id", cardJSON, "")
 	if err != nil {
@@ -137,6 +262,17 @@ func sendTextMsg(ctx context.Context, cfg *config.Config, chatID, receiveIDType,
 	card := fmt.Sprintf(`{"schema":"2.0","body":{"elements":[{"tag":"markdown","element_id":"msg","content":%s}]}}`, escaped)
 	_, err := sendCard(ctx, cfg, chatID, receiveIDType, card, messageID)
 	return err
+}
+
+func sendBotText(ctx context.Context, cfg *config.Config, chatID, chatType, visibleOpenID, text, messageID string) error {
+	escaped, _ := json.Marshal(text)
+	card := fmt.Sprintf(`{"schema":"2.0","body":{"elements":[{"tag":"markdown","element_id":"msg","content":%s}]}}`, escaped)
+	_, err := sendBotCard(ctx, cfg, chatID, chatType, visibleOpenID, card, messageID)
+	return err
+}
+
+func sendSessionText(ctx context.Context, cfg *config.Config, session botCardSession, text string) error {
+	return sendBotText(ctx, cfg, session.ChatID, session.ChatType, session.RequesterOpenID, text, session.ReplyMessageID)
 }
 
 func cardStr(v map[string]interface{}, key string) string {

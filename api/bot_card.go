@@ -223,7 +223,7 @@ func resendPrintConfigCard(cfg *config.Config, session botCardSession, sessionID
 		log.Printf("[bot] rebuild card for resend: %v", err)
 		return
 	}
-	if _, err := sendCard(context.Background(), cfg, chatID, idType, card, session.ReplyMessageID); err != nil {
+	if _, err := sendBotCard(context.Background(), cfg, chatID, session.ChatType, session.RequesterOpenID, card, session.ReplyMessageID); err != nil {
 		log.Printf("[bot] resend card failed: %v", err)
 	}
 }

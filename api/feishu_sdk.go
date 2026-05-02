@@ -148,6 +148,31 @@ func randomString(n int) string {
 	return hex.EncodeToString(b)[:n]
 }
 
+func getFeishuTenantAccessToken(ctx context.Context, cfg *config.Config) (string, error) {
+	appID := strings.TrimSpace(cfg.Auth.Feishu.AppID)
+	appSecret := strings.TrimSpace(cfg.Auth.Feishu.AppSecret)
+	if appID == "" || appSecret == "" {
+		return "", fmt.Errorf("auth.feishu.app_id/app_secret is not configured")
+	}
+
+	client := lark.NewClient(appID, appSecret)
+	tokenReq := larkcore.SelfBuiltTenantAccessTokenReq{
+		AppID:     appID,
+		AppSecret: appSecret,
+	}
+	tokenResp, err := client.GetTenantAccessTokenBySelfBuiltApp(ctx, &tokenReq)
+	if err != nil {
+		return "", fmt.Errorf("get tenant_access_token: %w", err)
+	}
+	if !tokenResp.Success() {
+		return "", fmt.Errorf("tenant_access_token error: code=%d msg=%s", tokenResp.Code, tokenResp.Msg)
+	}
+	if strings.TrimSpace(tokenResp.TenantAccessToken) == "" {
+		return "", fmt.Errorf("empty tenant_access_token")
+	}
+	return tokenResp.TenantAccessToken, nil
+}
+
 func getJSAPITicket(ctx context.Context, token string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		"https://open.feishu.cn/open-apis/jssdk/ticket/get", nil)
@@ -193,20 +218,12 @@ func generateJSSDKConfig(ctx context.Context, cfg *config.Config, pageURL string
 		return nil, fmt.Errorf("auth.feishu.app_id/app_secret is not configured")
 	}
 
-	client := lark.NewClient(appID, appSecret)
-	tokenReq := larkcore.SelfBuiltTenantAccessTokenReq{
-		AppID:     appID,
-		AppSecret: appSecret,
-	}
-	tokenResp, err := client.GetTenantAccessTokenBySelfBuiltApp(ctx, &tokenReq)
+	token, err := getFeishuTenantAccessToken(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("get tenant_access_token: %w", err)
-	}
-	if !tokenResp.Success() {
-		return nil, fmt.Errorf("tenant_access_token error: code=%d msg=%s", tokenResp.Code, tokenResp.Msg)
+		return nil, err
 	}
 
-	ticket, err := getJSAPITicket(ctx, tokenResp.TenantAccessToken)
+	ticket, err := getJSAPITicket(ctx, token)
 	if err != nil {
 		return nil, err
 	}

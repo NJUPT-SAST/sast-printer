@@ -11,14 +11,16 @@ import (
 )
 
 type botCardSession struct {
-	SourcePath     string
-	Filename       string
-	PrinterID      string
-	ChatID         string
-	ChatType       string
-	CardID         string
-	ReplyMessageID string
-	CreatedAt      time.Time
+	SourcePath         string
+	Filename           string
+	PrinterID          string
+	ChatID             string
+	ChatType           string
+	RequesterOpenID    string
+	CardID             string
+	EphemeralMessageID string
+	ReplyMessageID     string
+	CreatedAt          time.Time
 }
 
 func persistSessionFile(sourcePath string) (string, error) {
@@ -43,12 +45,16 @@ func startBotSessionCleaner() {
 		defer ticker.Stop()
 		for range ticker.C {
 			var expiredCardIDs []string
+			var expiredEphemeralMessageIDs []string
 			botSessionsMu.Lock()
 			for id, s := range botSessions {
 				if time.Since(s.CreatedAt) > ttl {
 					_ = os.Remove(s.SourcePath)
 					if s.CardID != "" {
 						expiredCardIDs = append(expiredCardIDs, s.CardID)
+					}
+					if s.EphemeralMessageID != "" {
+						expiredEphemeralMessageIDs = append(expiredEphemeralMessageIDs, s.EphemeralMessageID)
 					}
 					delete(botSessions, id)
 				}
@@ -58,6 +64,11 @@ func startBotSessionCleaner() {
 			for _, cardID := range expiredCardIDs {
 				if err := disableCardButtons(context.Background(), cfg, cardID); err != nil {
 					log.Printf("[bot] session cleaner disable buttons card=%s: %v", cardID, err)
+				}
+			}
+			for _, messageID := range expiredEphemeralMessageIDs {
+				if err := deleteEphemeralCard(context.Background(), cfg, messageID); err != nil {
+					log.Printf("[bot] session cleaner delete ephemeral message=%s: %v", messageID, err)
 				}
 			}
 		}
