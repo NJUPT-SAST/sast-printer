@@ -73,7 +73,7 @@ func rewriteProxyLocation(location string, target *url.URL) (string, bool) {
 	if isUnsafeRedirectPathPrefix(location) {
 		return prefix + "/", true
 	}
-	if strings.HasPrefix(location, "/") {
+	if strings.HasPrefix(location, "/") && !isUnsafeRedirectPathPrefix(location) {
 		suffix := strings.TrimPrefix(location, prefix)
 		if suffix != location && isUnsafeRedirectPathPrefix(suffix) {
 			return prefix + "/", true
