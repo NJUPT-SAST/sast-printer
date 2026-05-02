@@ -1,6 +1,6 @@
 module goprint
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/gin-gonic/gin v1.9.1
@@ -38,10 +38,10 @@ require (
 	github.com/ugorji/go/codec v1.2.11 // indirect
 	golang.org/x/arch v0.3.0 // indirect
 	golang.org/x/crypto v0.47.0 // indirect
-	golang.org/x/image v0.19.0 // indirect
+	golang.org/x/image v0.38.0 // indirect
 	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
-	golang.org/x/text v0.33.0 // indirect
+	golang.org/x/text v0.35.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260120221211-b8f7ae30c516 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )

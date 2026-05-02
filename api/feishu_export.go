@@ -89,10 +89,10 @@ func extractUserAccessToken(c *gin.Context) string {
 }
 
 var feishuDocURLRE = regexp.MustCompile(
-	`^https?://[^/]+\.feishu\.cn/(docx|doc|sheets|bitable|mindnotes)/([A-Za-z0-9_-]+)`)
+	`https?://[^/]+\.feishu\.cn/(docx|doc|sheets|bitable|mindnotes)/([A-Za-z0-9_-]+)`)
 
 var feishuWikiURLRE = regexp.MustCompile(
-	`^https?://[^/]+\.feishu\.cn/wiki/([A-Za-z0-9_-]+)`)
+	`https?://[^/]+\.feishu\.cn/wiki/([A-Za-z0-9_-]+)`)
 
 func parseFeishuURL(rawURL string) (docType string, token string, err error) {
 	rawURL = strings.TrimSpace(rawURL)
@@ -612,7 +612,7 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 			return
 		}
 
-		token, expiresAt, err := saveManualDuplexPending(initialJobID, printerID, secondPassToStore, 1)
+		token, expiresAt, err := saveManualDuplexPending(initialJobID, printerID, secondPassToStore, 1, "")
 		if err != nil {
 			_ = os.Remove(secondPassToStore)
 			c.JSON(http.StatusInternalServerError, gin.H{

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,8 +22,8 @@ import (
 	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
-	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkcardkit "github.com/larksuite/oapi-sdk-go/v3/service/cardkit/v1"
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
 var botDispatcher *dispatcher.EventDispatcher
@@ -32,6 +33,7 @@ func initBotDispatcher() {
 	if cfg == nil || !cfg.Bot.Enabled {
 		return
 	}
+	startBotSessionCleaner()
 	botDispatcher = dispatcher.NewEventDispatcher("", cfg.Bot.EncryptKey).
 		OnP2MessageReceiveV1(func(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
 			go processMessageEvent(getConfig(), event)
@@ -76,6 +78,30 @@ func buildPrinterOptions(cfg *config.Config) []printerOption {
 
 // --- Card builder ---
 
+func nupIndex(nup int) int {
+	switch nup {
+	case 2:
+		return 2
+	case 4:
+		return 3
+	case 6:
+		return 4
+	default:
+		return 1
+	}
+}
+
+func duplexIndex(duplex string) int {
+	switch duplex {
+	case "auto":
+		return 2
+	case "manual":
+		return 3
+	default:
+		return 1
+	}
+}
+
 func buildPrintConfigCard(filename string, totalPages int, printers []printerOption, defaults config.FileTypeDefault, sessionID string) (string, error) {
 	mkOptText := func(s string) map[string]interface{} {
 		return map[string]interface{}{"tag": "plain_text", "content": s}
@@ -115,8 +141,8 @@ func buildPrintConfigCard(filename string, totalPages int, printers []printerOpt
 
 	card := map[string]interface{}{
 		"schema": "2.0",
-		"config": map[string]interface{}{},
 		"header": map[string]interface{}{
+			"template": "blue",
 			"title": map[string]interface{}{
 				"tag":     "plain_text",
 				"content": "🖨️ 打印配置",
@@ -125,12 +151,9 @@ func buildPrintConfigCard(filename string, totalPages int, printers []printerOpt
 		"body": map[string]interface{}{
 			"elements": []interface{}{
 				map[string]interface{}{
-					"tag":        "div",
+					"tag":        "markdown",
 					"element_id": "file_info",
-					"text": map[string]interface{}{
-						"tag":     "lark_md",
-						"content": fmt.Sprintf("📄 **%s**　共 %d 页", filename, totalPages),
-					},
+					"content":    fmt.Sprintf("📄 **%s**　共 %d 页", filename, totalPages),
 				},
 				map[string]interface{}{
 					"tag":        "form",
@@ -138,75 +161,99 @@ func buildPrintConfigCard(filename string, totalPages int, printers []printerOpt
 					"name":       "print_form",
 					"elements": []interface{}{
 						map[string]interface{}{
-							"tag":         "select_static",
-							"element_id":  "printer_select",
-							"name":        "printer_id",
-							"placeholder": map[string]interface{}{"tag": "plain_text", "content": "选择打印机"},
-							"options":     printerOpts,
-							"value":       map[string]interface{}{"printer_id": printers[0].ID},
-							"behaviors": []interface{}{
-								map[string]interface{}{"type": "callback", "value": map[string]interface{}{}},
-							},
+							"tag":           "select_static",
+							"element_id":    "printer_select",
+							"name":          "printer_id",
+							"placeholder":   map[string]interface{}{"tag": "plain_text", "content": "选择打印机"},
+							"options":       printerOpts,
+							"initial_index": 1,
+							"width":         "fill",
 						},
 						map[string]interface{}{
-							"tag":        "input",
-							"element_id": "copies_input",
-							"name":       "copies",
-							"label":      map[string]interface{}{"tag": "plain_text", "content": "份数"},
-							"value":      map[string]interface{}{"copies": fmt.Sprintf("%d", copies)},
+							"tag":           "input",
+							"element_id":    "copies_input",
+							"name":          "copies",
+							"label":         map[string]interface{}{"tag": "plain_text", "content": "份数"},
+							"default_value": fmt.Sprintf("%d", copies),
+							"width":         "fill",
 						},
 						map[string]interface{}{
-							"tag":        "input",
-							"element_id": "pages_input",
-							"name":       "pages",
-							"label":      map[string]interface{}{"tag": "plain_text", "content": "页码范围"},
-							"value":      map[string]interface{}{"pages": fmt.Sprintf("1-%d", totalPages)},
+							"tag":           "input",
+							"element_id":    "pages_input",
+							"name":          "pages",
+							"label":         map[string]interface{}{"tag": "plain_text", "content": "页码范围"},
+							"default_value": fmt.Sprintf("1-%d", totalPages),
+							"width":         "fill",
 						},
 						map[string]interface{}{
-							"tag":         "select_static",
-							"element_id":  "nup_select",
-							"name":        "nup",
-							"placeholder": map[string]interface{}{"tag": "plain_text", "content": "缩印"},
-							"options":     nupOptions,
-							"value":       map[string]interface{}{"nup": fmt.Sprintf("%d", nup)},
-							"behaviors": []interface{}{
-								map[string]interface{}{"type": "callback", "value": map[string]interface{}{}},
-							},
+							"tag":           "select_static",
+							"element_id":    "nup_select",
+							"name":          "nup",
+							"placeholder":   map[string]interface{}{"tag": "plain_text", "content": "缩印"},
+							"options":       nupOptions,
+							"initial_index": nupIndex(nup),
+							"width":         "fill",
 						},
 						map[string]interface{}{
-							"tag":         "select_static",
-							"element_id":  "duplex_select",
-							"name":        "duplex",
-							"placeholder": map[string]interface{}{"tag": "plain_text", "content": "单双面"},
-							"options":     duplexOptions,
-							"value":       map[string]interface{}{"duplex": duplex},
-							"behaviors": []interface{}{
-								map[string]interface{}{"type": "callback", "value": map[string]interface{}{}},
-							},
-						},
-						map[string]interface{}{"tag": "hr", "element_id": "divider"},
-						map[string]interface{}{
-							"tag":              "button",
-							"element_id":       "cancel_btn",
-							"text":             map[string]interface{}{"tag": "plain_text", "content": "取消"},
-							"type":             "default",
-							"form_action_type": "reset",
-							"name":             "cancel_btn",
+							"tag":           "select_static",
+							"element_id":    "duplex_select",
+							"name":          "duplex",
+							"placeholder":   map[string]interface{}{"tag": "plain_text", "content": "单双面"},
+							"options":       duplexOptions,
+							"initial_index": duplexIndex(duplex),
+							"width":         "fill",
 						},
 						map[string]interface{}{
-							"tag":              "button",
-							"element_id":       "print_btn",
-							"text":             map[string]interface{}{"tag": "plain_text", "content": "开始打印"},
-							"type":             "primary",
-							"form_action_type": "submit",
-							"name":             "print_btn",
-							"value":            map[string]interface{}{"action": "print", "session_id": sessionID},
-							"confirm": map[string]interface{}{
-								"title": map[string]interface{}{"tag": "plain_text", "content": "确认打印？"},
-								"text":  map[string]interface{}{"tag": "plain_text", "content": "将按所选参数提交打印任务"},
+							"tag":                "column_set",
+							"element_id":         "btn_cols",
+							"flex_mode":          "bisect",
+							"horizontal_spacing": "8px",
+							"horizontal_align":   "right",
+							"columns": []interface{}{
+								map[string]interface{}{
+									"tag":   "column",
+									"width": "auto",
+									"elements": []interface{}{
+										map[string]interface{}{
+											"tag":              "button",
+											"element_id":       "cancel_btn",
+											"text":             map[string]interface{}{"tag": "plain_text", "content": "取消"},
+											"type":             "default",
+											"form_action_type": "reset",
+											"name":             "cancel_btn",
+										},
+									},
+								},
+								map[string]interface{}{
+									"tag":   "column",
+									"width": "auto",
+									"elements": []interface{}{
+										map[string]interface{}{
+											"tag":              "button",
+											"element_id":       "print_btn",
+											"text":             map[string]interface{}{"tag": "plain_text", "content": "开始打印"},
+											"type":             "primary_filled",
+											"form_action_type": "submit",
+											"name":             "print_btn",
+											"behaviors": []interface{}{
+												map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "print", "session_id": sessionID}},
+											},
+											"confirm": map[string]interface{}{
+												"title": map[string]interface{}{"tag": "plain_text", "content": "确认打印？"},
+												"text":  map[string]interface{}{"tag": "plain_text", "content": "将按所选参数提交打印任务"},
+											},
+										},
+									},
+								},
 							},
 						},
 					},
+				},
+				map[string]interface{}{"tag": "hr", "element_id": "divider"},
+				map[string]interface{}{
+					"tag":        "markdown",
+					"element_id": "timeout_hint",
+					"content":    fmt.Sprintf("⏰ %d 分钟后自动取消任务", int(botCardTTL().Minutes())),
 				},
 			},
 		},
@@ -214,6 +261,50 @@ func buildPrintConfigCard(filename string, totalPages int, printers []printerOpt
 
 	b, err := json.Marshal(card)
 	return string(b), err
+}
+
+func resendPrintConfigCard(cfg *config.Config, session botCardSession, sessionID, chatID, idType string) {
+	pages, err := countPDFPages(session.SourcePath)
+	if err != nil {
+		log.Printf("[bot] recount pages for resend: %v", err)
+		return
+	}
+	defaults := cfg.ResolveFileTypeDefault(session.Filename)
+	printers := buildPrinterOptions(cfg)
+	card, err := buildPrintConfigCard(session.Filename, pages, printers, defaults, sessionID)
+	if err != nil {
+		log.Printf("[bot] rebuild card for resend: %v", err)
+		return
+	}
+	if _, err := sendCard(context.Background(), cfg, chatID, idType, card, session.ReplyMessageID); err != nil {
+		log.Printf("[bot] resend card failed: %v", err)
+	}
+}
+
+func isValidPages(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return true
+	}
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return false
+		}
+		rng := strings.SplitN(part, "-", 2)
+		if len(rng) == 2 {
+			start, err1 := strconv.Atoi(strings.TrimSpace(rng[0]))
+			end, err2 := strconv.Atoi(strings.TrimSpace(rng[1]))
+			if err1 != nil || err2 != nil || start < 1 || end < start {
+				return false
+			}
+		} else {
+			if _, err := strconv.Atoi(part); err != nil {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func ptrStr(s *string) string {
@@ -230,10 +321,10 @@ func receiveIDType(chatType string) string {
 	return "chat_id"
 }
 
-func sendCard(ctx context.Context, cfg *config.Config, chatID, receiveIDType, cardJSON string) error {
+func sendCard(ctx context.Context, cfg *config.Config, chatID, receiveIDType, cardJSON, messageID string) (string, error) {
 	client, err := newFeishuClient(cfg)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	// Step 1: Create card entity via CardKit API
@@ -246,53 +337,150 @@ func sendCard(ctx context.Context, cfg *config.Config, chatID, receiveIDType, ca
 
 	cardResp, err := client.Cardkit.V1.Card.Create(ctx, cardReq)
 	if err != nil {
-		return fmt.Errorf("cardkit create: %w", err)
+		return "", fmt.Errorf("cardkit create: %w", err)
 	}
 	if !cardResp.Success() {
-		return fmt.Errorf("cardkit create error: code=%d msg=%s", cardResp.Code, cardResp.Msg)
+		return "", fmt.Errorf("cardkit create error: code=%d msg=%s", cardResp.Code, cardResp.Msg)
 	}
 	cardID := *cardResp.Data.CardId
 
-	// Step 2: Send message with card_id
-	content, _ := json.Marshal(map[string]string{
-		"type":    "card_id",
-		"card_id": cardID,
+	// Step 2: Send or reply with the CardKit entity
+	content, _ := json.Marshal(map[string]interface{}{
+		"type": "card",
+		"data": map[string]string{"card_id": cardID},
 	})
+	contentStr := string(content)
+
+	if messageID != "" {
+		replyReq := larkim.NewReplyMessageReqBuilder().
+			MessageId(messageID).
+			Body(larkim.NewReplyMessageReqBodyBuilder().
+				Content(contentStr).
+				MsgType("interactive").
+				Build()).
+			Build()
+		resp, replyErr := client.Im.V1.Message.Reply(ctx, replyReq)
+		if replyErr != nil {
+			return "", fmt.Errorf("reply card: %w", replyErr)
+		}
+		if !resp.Success() {
+			return "", fmt.Errorf("reply card error: code=%d msg=%s", resp.Code, resp.Msg)
+		}
+		return cardID, nil
+	}
 
 	req := larkim.NewCreateMessageReqBuilder().
 		ReceiveIdType(receiveIDType).
 		Body(larkim.NewCreateMessageReqBodyBuilder().
 			ReceiveId(chatID).
 			MsgType("interactive").
-			Content(string(content)).
+			Content(contentStr).
 			Build()).
 		Build()
 
 	resp, err := client.Im.V1.Message.Create(ctx, req)
 	if err != nil {
-		return fmt.Errorf("send card: %w", err)
+		return "", fmt.Errorf("send card: %w", err)
 	}
 	if !resp.Success() {
-		return fmt.Errorf("send card error: code=%d msg=%s", resp.Code, resp.Msg)
+		return "", fmt.Errorf("send card error: code=%d msg=%s", resp.Code, resp.Msg)
 	}
-	return nil
+	return cardID, nil
 }
 
-func sendTextMsg(ctx context.Context, cfg *config.Config, chatID, receiveIDType, text string) error {
+func notifyUserCard(ctx context.Context, cfg *config.Config, openID, cardJSON string) {
+	cardID, err := sendCard(ctx, cfg, openID, "open_id", cardJSON, "")
+	if err != nil {
+		log.Printf("[bot] notify user card failed: %v", err)
+		return
+	}
+	log.Printf("[bot] notified user %s card_id=%s", maskSensitive(openID), cardID)
+}
+
+func disableCardButtons(ctx context.Context, cfg *config.Config, cardID string) {
+	client, err := newFeishuClient(cfg)
+	if err != nil {
+		log.Printf("[bot] patch card: %v", err)
+		return
+	}
+	for _, el := range []string{"print_btn", "cancel_btn"} {
+		patch := `{"disabled":true}`
+		if el == "print_btn" {
+			patch = `{"disabled":true,"text":{"tag":"plain_text","content":"处理中..."}}`
+		}
+		req := larkcardkit.NewPatchCardElementReqBuilder().
+			CardId(cardID).
+			ElementId(el).
+			Body(larkcardkit.NewPatchCardElementReqBodyBuilder().
+				PartialElement(patch).
+				Build()).
+			Build()
+		_, err := client.Cardkit.V1.CardElement.Patch(ctx, req)
+		if err != nil {
+			log.Printf("[bot] patch card element %s: %v", el, err)
+		}
+	}
+}
+
+func sendTextMsg(ctx context.Context, cfg *config.Config, chatID, receiveIDType, text, messageID string) error {
 	escaped, _ := json.Marshal(text)
-	card := fmt.Sprintf(`{"schema":"2.0","config":{},"body":{"elements":[{"tag":"div","element_id":"msg","text":{"tag":"lark_md","content":%s}}]}}`, escaped)
-	return sendCard(ctx, cfg, chatID, receiveIDType, card)
+	card := fmt.Sprintf(`{"schema":"2.0","body":{"elements":[{"tag":"markdown","element_id":"msg","content":%s}]}}`, escaped)
+	_, err := sendCard(ctx, cfg, chatID, receiveIDType, card, messageID)
+	return err
 }
 
 // --- Card session storage ---
 
 type botCardSession struct {
-	SourcePath string
-	Filename   string
-	PrinterID  string
-	ChatID     string
-	ChatType   string
-	CreatedAt  time.Time
+	SourcePath     string
+	Filename       string
+	PrinterID      string
+	ChatID         string
+	ChatType       string
+	CardID         string
+	ReplyMessageID string
+	CreatedAt      time.Time
+}
+
+func persistSessionFile(sourcePath string) (string, error) {
+	dir := filepath.Join(tempDir(), "bot-sessions")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	dst := filepath.Join(dir, filepath.Base(sourcePath))
+	if err := os.Rename(sourcePath, dst); err != nil {
+		return "", fmt.Errorf("rename %s -> %s: %w", sourcePath, dst, err)
+	}
+	return dst, nil
+}
+
+func startBotSessionCleaner() {
+	go func() {
+		ttl := botCardTTL()
+		if ttl <= 0 {
+			ttl = 10 * time.Minute
+		}
+		ticker := time.NewTicker(ttl)
+		defer ticker.Stop()
+		for range ticker.C {
+			var expiredCardIDs []string
+			botSessionsMu.Lock()
+			for id, s := range botSessions {
+				if time.Since(s.CreatedAt) > ttl {
+					_ = os.Remove(s.SourcePath)
+					if s.CardID != "" {
+						expiredCardIDs = append(expiredCardIDs, s.CardID)
+					}
+					delete(botSessions, id)
+				}
+			}
+			botSessionsMu.Unlock()
+			cfg := getConfig()
+			for _, cardID := range expiredCardIDs {
+				go disableCardButtons(context.Background(), cfg, cardID)
+			}
+		}
+	}()
 }
 
 var (
@@ -306,11 +494,24 @@ func saveBotSession(id string, s botCardSession) {
 	botSessions[id] = s
 }
 
+func deleteBotSession(id string) {
+	botSessionsMu.Lock()
+	defer botSessionsMu.Unlock()
+	delete(botSessions, id)
+}
+
 func getBotSession(id string) (botCardSession, bool) {
 	botSessionsMu.RLock()
-	defer botSessionsMu.RUnlock()
 	s, ok := botSessions[id]
-	if !ok || time.Since(s.CreatedAt) > botCardTTL() {
+	expired := ok && time.Since(s.CreatedAt) > botCardTTL()
+	botSessionsMu.RUnlock()
+
+	if expired {
+		_ = os.Remove(s.SourcePath)
+		deleteBotSession(id)
+		return botCardSession{}, false
+	}
+	if !ok {
 		return botCardSession{}, false
 	}
 	return s, true
@@ -349,6 +550,7 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 		}
 	}
 	idType := receiveIDType(chatType)
+	messageID := ptrStr(msg.MessageId)
 
 	var content struct {
 		FileKey  string `json:"file_key"`
@@ -356,7 +558,7 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 		Text     string `json:"text"`
 	}
 	if err := json.Unmarshal([]byte(contentJSON), &content); err != nil {
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "无法解析消息")
+		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "无法解析消息", messageID)
 		return
 	}
 
@@ -367,10 +569,14 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 
 	switch msgType {
 	case "file":
+		if !isSupportedUploadFile(cfg, content.FileName) {
+			_ = sendTextMsg(context.Background(), cfg, chatID, idType, "不支持的文件类型，请发送 PDF、Office 文档（doc/docx/ppt/pptx）或图片（jpg/png）", messageID)
+			return
+		}
 		path, fn, cl, err := downloadBotFile(context.Background(), cfg, ptrStr(msg.MessageId), content.FileKey, content.FileName)
 		if err != nil {
 			log.Printf("[bot] download file failed: %v", err)
-			_ = sendTextMsg(context.Background(), cfg, chatID, idType, fmt.Sprintf("下载文件失败：%v", err))
+			_ = sendTextMsg(context.Background(), cfg, chatID, idType, fmt.Sprintf("下载文件失败：%v", err), messageID)
 			return
 		}
 		sourcePath, filename, cleanup = path, fn, cl
@@ -380,7 +586,7 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 			pdfPath, convErr := convertOfficeToPDF(context.Background(), cfg, sourcePath)
 			if convErr != nil {
 				log.Printf("[bot] office convert failed: %v", convErr)
-				_ = sendTextMsg(context.Background(), cfg, chatID, idType, "文档转换失败，请确保文件格式正确")
+				_ = sendTextMsg(context.Background(), cfg, chatID, idType, "文档转换失败，请确保文件格式正确", messageID)
 				cleanup()
 				return
 			}
@@ -391,7 +597,7 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 			pdfPath, convErr := convertImageToPDF(cfg, sourcePath)
 			if convErr != nil {
 				log.Printf("[bot] image convert failed: %v", convErr)
-				_ = sendTextMsg(context.Background(), cfg, chatID, idType, "图片转换失败")
+				_ = sendTextMsg(context.Background(), cfg, chatID, idType, "图片转换失败", messageID)
 				cleanup()
 				return
 			}
@@ -405,47 +611,33 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 		if raw == "" {
 			return
 		}
-		docType, token, urlErr := parseFeishuURL(raw)
-		if urlErr != nil {
-			_ = sendTextMsg(context.Background(), cfg, chatID, idType, "请发送文件（PDF/Office/图片）或飞书云文档链接")
-			return
-		}
 		client, cliErr := newFeishuClient(cfg)
 		if cliErr != nil {
-			_ = sendTextMsg(context.Background(), cfg, chatID, idType, "内部错误")
+			_ = sendTextMsg(context.Background(), cfg, chatID, idType, "内部错误", messageID)
 			return
 		}
-		doc := &feishuDocInfo{Token: token, Type: docType}
-		if docType == "wiki" {
-			_ = sendTextMsg(context.Background(), cfg, chatID, idType, "Bot 暂不支持 Wiki 链接，请发送文件或使用网页端")
+		pdfPath, docFilename, exportErr := exportFeishuDocToPDF(context.Background(), client, "", raw)
+		if exportErr != nil {
+			_ = sendTextMsg(context.Background(), cfg, chatID, idType, fmt.Sprintf("导出失败：%v", exportErr), messageID)
 			return
 		}
-		ticket, tkErr := createExportTask(context.Background(), client, "", doc)
-		if tkErr != nil {
-			_ = sendTextMsg(context.Background(), cfg, chatID, idType, fmt.Sprintf("导出失败：%v", tkErr))
-			return
-		}
-		fileToken, pollErr := pollExportTask(context.Background(), client, "", ticket, doc.Token)
-		if pollErr != nil {
-			_ = sendTextMsg(context.Background(), cfg, chatID, idType, fmt.Sprintf("导出超时：%v", pollErr))
-			return
-		}
-		pdfPath, dlErr := downloadExportedFile(context.Background(), client, "", fileToken, doc.Filename)
-		if dlErr != nil {
-			_ = sendTextMsg(context.Background(), cfg, chatID, idType, fmt.Sprintf("下载失败：%v", dlErr))
-			return
-		}
-		sourcePath, filename = pdfPath, doc.Filename
+		sourcePath, filename = pdfPath, docFilename
 		cleanup = func() { _ = os.Remove(pdfPath) }
+		isCloudDoc = true
 
 	default:
+		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "请发送 PDF/Office 文档/图片文件，或飞书云文档链接", messageID)
 		return
 	}
-	defer cleanup()
+	defer func() {
+		if cleanup != nil {
+			cleanup()
+		}
+	}()
 
 	pages, err := countPDFPages(sourcePath)
 	if err != nil {
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "无法读取文件页数")
+		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "无法读取文件页数", messageID)
 		return
 	}
 
@@ -454,26 +646,42 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 		defaults = cfg.CloudDocDefault()
 	}
 	printers := buildPrinterOptions(cfg)
-
-	sessionID := fmt.Sprintf("%s-%d", chatID, time.Now().UnixNano())
-	saveBotSession(sessionID, botCardSession{
-		SourcePath: sourcePath,
-		Filename:   filename,
-		PrinterID:  printers[0].ID,
-		ChatID:     chatID,
-		ChatType:   chatType,
-		CreatedAt:  time.Now(),
-	})
-
-	card, err := buildPrintConfigCard(filename, pages, printers, defaults, sessionID)
-	if err != nil {
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "构建卡片失败")
+	if len(printers) == 0 {
+		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "没有可用的打印机", messageID)
 		return
 	}
 
-	if err := sendCard(context.Background(), cfg, chatID, idType, card); err != nil {
-		log.Printf("[bot] send card failed: %v", err)
+	sessionID := fmt.Sprintf("%s-%d", chatID, time.Now().UnixNano())
+
+	card, err := buildPrintConfigCard(filename, pages, printers, defaults, sessionID)
+	if err != nil {
+		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "构建卡片失败", messageID)
+		return
 	}
+
+	cardID, err := sendCard(context.Background(), cfg, chatID, idType, card, messageID)
+	if err != nil {
+		log.Printf("[bot] send card failed: %v", err)
+		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "发送卡片失败，请重试", messageID)
+		return
+	}
+
+	persistedPath, persistErr := persistSessionFile(sourcePath)
+	if persistErr != nil {
+		log.Printf("[bot] persist session file: %v", persistErr)
+		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "保存文件失败，请重试", messageID)
+		return
+	}
+	saveBotSession(sessionID, botCardSession{
+			ReplyMessageID: messageID,
+		SourcePath: persistedPath,
+		Filename:   filename,
+		PrinterID:  printers[0].ID,
+		ChatID:     chatID,
+		CardID:     cardID,
+		ChatType:   chatType,
+		CreatedAt:  time.Now(),
+	})
 }
 
 func downloadBotFile(ctx context.Context, cfg *config.Config, messageID, fileKey, fileName string) (string, string, func(), error) {
@@ -552,12 +760,17 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	sessionID := cardStr(values, "session_id")
 	session, ok := getBotSession(sessionID)
 	if !ok {
+		// sessionID is "chatID-timestamp", extract chatID for error reply
+		if idx := strings.LastIndex(sessionID, "-"); idx > 0 {
+			_ = sendTextMsg(context.Background(), cfg, sessionID[:idx], "open_id", "会话已过期，请重新发送文件", "")
+		}
 		log.Printf("[bot] card session expired or not found: %s", sessionID)
 		return
 	}
 
 	chatID := session.ChatID
 	idType := receiveIDType(session.ChatType)
+	replyMsgID := session.ReplyMessageID
 
 	printerID := cardStr(values, "printer_id")
 	copies, _ := strconv.Atoi(cardStr(values, "copies"))
@@ -574,9 +787,36 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		duplex = "off"
 	}
 
+	// Validate inputs; re-send config card with error hint on invalid input
+	if printerID == "" {
+		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "请选择打印机", replyMsgID)
+		return
+	}
+	if copies < 1 || copies > 99 {
+		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "份数必须为 1-99", replyMsgID)
+		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
+		return
+	}
+	if !isValidPages(pagesStr) {
+		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "页码范围格式无效（如 1-5,7,9-12）", replyMsgID)
+		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
+		return
+	}
+	if nup != 1 && !validNup(nup) {
+		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "无效的缩印选项（支持 1/2/4/6）", replyMsgID)
+		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
+		return
+	}
+	if duplex != "off" && duplex != "auto" && duplex != "manual" {
+		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "无效的双面选项", replyMsgID)
+		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
+		return
+	}
+
 	printerCfg, err := resolvePrinter(printerID)
 	if err != nil {
 		log.Printf("[bot] resolve printer %s: %v", printerID, err)
+		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "打印机配置错误", replyMsgID)
 		return
 	}
 
@@ -587,7 +827,8 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	if pagesStr != "" {
 		selectedPath, cleanupPages, err := extractPDFPages(printSourcePath, pagesStr)
 		if err != nil {
-			log.Printf("[bot] extract pages: %v", err)
+			log.Printf("[bot] extract pages pagesStr=%q source=%s: %v", pagesStr, printSourcePath, err)
+			_ = sendTextMsg(context.Background(), cfg, chatID, idType, fmt.Sprintf("页码范围提取失败：%v", err), replyMsgID)
 			return
 		}
 		printSourcePath = selectedPath
@@ -601,6 +842,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		nupPath, cleanupNup, err := applyNupLayout(printSourcePath, nup)
 		if err != nil {
 			log.Printf("[bot] nup: %v", err)
+			_ = sendTextMsg(context.Background(), cfg, chatID, idType, "缩印排版失败", replyMsgID)
 			return
 		}
 		if nupPath != printSourcePath {
@@ -613,6 +855,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	cupsClient, printerName, err := newCupsClientForPrinter(printerCfg)
 	if err != nil {
 		log.Printf("[bot] cups client: %v", err)
+		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "打印机连接失败", replyMsgID)
 		return
 	}
 
@@ -625,13 +868,14 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	}
 
 	if duplexMode != "off" && printerCfg.NormalizedDuplexMode() == "off" && duplex != "manual" {
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "该打印机不支持双面打印")
+		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "该打印机不支持双面打印", replyMsgID)
 		return
 	}
 
 	finalPath, err := applyCopiesMode(printSourcePath, copies, true)
 	if err != nil {
 		log.Printf("[bot] copies: %v", err)
+		_ = sendTextMsg(context.Background(), cfg, chatID, idType, "份数排版失败", replyMsgID)
 		return
 	}
 	if finalPath != printSourcePath {
@@ -642,6 +886,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		firstPassPath, secondPassPath, cleanupDup, err := prepareManualDuplexFiles(finalPath, printerCfg)
 		if err != nil {
 			log.Printf("[bot] manual duplex prepare: %v", err)
+			_ = sendTextMsg(context.Background(), cfg, chatID, idType, "手动双面准备失败", replyMsgID)
 			return
 		}
 		defer cleanupDup()
@@ -649,19 +894,30 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		jobID, err := cupsClient.SubmitJob(printerName, firstPassPath, cups.PrintOptions{Copies: 1})
 		if err != nil {
 			log.Printf("[bot] submit first pass: %v", err)
+			_ = sendTextMsg(context.Background(), cfg, chatID, idType, "手动双面提交失败", replyMsgID)
 			return
 		}
 
-		token, _, err := saveManualDuplexPending(jobID, printerID, secondPassPath, 1)
+		token, _, err := saveManualDuplexPending(jobID, printerID, secondPassPath, 1, openID)
 		if err != nil {
 			log.Printf("[bot] save duplex pending: %v", err)
+			_ = sendTextMsg(context.Background(), cfg, chatID, idType, "保存双面任务失败", replyMsgID)
 			return
 		}
 
-		duplexCard, _ := buildDuplexContinueCard(token)
-		_ = sendCard(context.Background(), cfg, chatID, idType, duplexCard)
+		duplexCard, err := buildDuplexContinueCard(token)
+		if err != nil {
+			log.Printf("[bot] build duplex card: %v", err)
+		} else {
+			_, _ = sendCard(context.Background(), cfg, chatID, idType, duplexCard, replyMsgID)
+		}
 
 		persistBotJob(cfg, jobID, printerID, session.Filename, copies, true, openID)
+		if session.CardID != "" {
+			go disableCardButtons(context.Background(), cfg, session.CardID)
+		}
+		_ = os.Remove(session.SourcePath)
+		deleteBotSession(sessionID)
 		return
 	}
 
@@ -670,6 +926,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		reversedPath, reverseErr := prepareReversedPDF(finalPath)
 		if reverseErr != nil {
 			log.Printf("[bot] reverse pdf: %v", reverseErr)
+			_ = sendTextMsg(context.Background(), cfg, chatID, idType, "PDF逆序处理失败", replyMsgID)
 			return
 		}
 		if reversedPath != finalPath {
@@ -691,19 +948,28 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	jobID, err := cupsClient.SubmitJob(printerName, printPath, printOpts)
 	if err != nil {
 		log.Printf("[bot] submit job: %v", err)
-		_ = sendTextMsg(context.Background(), cfg, chatID, idType, fmt.Sprintf("打印提交失败：%v", err))
+		_ = sendTextMsg(context.Background(), cfg, chatID, idType, fmt.Sprintf("打印提交失败：%v", err), replyMsgID)
 		return
 	}
 
 	persistBotJob(cfg, jobID, printerID, session.Filename, copies, duplexMode != "off", openID)
+	if session.CardID != "" {
+		go disableCardButtons(context.Background(), cfg, session.CardID)
+	}
+	_ = os.Remove(session.SourcePath)
+	deleteBotSession(sessionID)
 	log.Printf("[bot] print job submitted: job_id=%s printer=%s duplex=%s", jobID, printerID, duplexMode)
 
 	duplexLabel := "单面"
 	if duplexMode != "off" {
 		duplexLabel = "双面（" + duplexMode + "）"
 	}
-	card, _ := buildJobSubmittedCard(jobID, printerID, session.Filename, copies, duplexLabel)
-	_ = sendCard(context.Background(), cfg, chatID, idType, card)
+	card, err := buildJobSubmittedCard(jobID, printerID, session.Filename, copies, duplexLabel)
+	if err != nil {
+		log.Printf("[bot] build submitted card: %v", err)
+	} else {
+		_, _ = sendCard(context.Background(), cfg, chatID, idType, card, replyMsgID)
+	}
 }
 
 func persistBotJob(cfg *config.Config, jobID, printerID, filename string, copies int, duplex bool, openID string) {
@@ -733,8 +999,8 @@ func persistBotJob(cfg *config.Config, jobID, printerID, filename string, copies
 func buildJobSubmittedCard(jobID, printerID, filename string, copies int, duplex string) (string, error) {
 	card := map[string]interface{}{
 		"schema": "2.0",
-		"config": map[string]interface{}{},
 		"header": map[string]interface{}{
+			"template": "green",
 			"title": map[string]interface{}{
 				"tag":     "plain_text",
 				"content": "打印任务已提交",
@@ -754,11 +1020,9 @@ func buildJobSubmittedCard(jobID, printerID, filename string, copies int, duplex
 				},
 				map[string]interface{}{"tag": "hr", "element_id": "divider"},
 				map[string]interface{}{
-					"tag":        "note",
+					"tag":        "markdown",
 					"element_id": "job_id_note",
-					"elements": []interface{}{
-						map[string]interface{}{"tag": "plain_text", "content": "任务 ID: " + jobID},
-					},
+					"content":    "任务 ID: " + jobID,
 				},
 			},
 		},
@@ -770,8 +1034,8 @@ func buildJobSubmittedCard(jobID, printerID, filename string, copies int, duplex
 func buildDuplexContinueCard(token string) (string, error) {
 	card := map[string]interface{}{
 		"schema": "2.0",
-		"config": map[string]interface{}{},
 		"header": map[string]interface{}{
+			"template": "orange",
 			"title": map[string]interface{}{
 				"tag":     "plain_text",
 				"content": "🔄 手动双面打印",
@@ -780,34 +1044,52 @@ func buildDuplexContinueCard(token string) (string, error) {
 		"body": map[string]interface{}{
 			"elements": []interface{}{
 				map[string]interface{}{
-					"tag":        "div",
+					"tag":        "markdown",
 					"element_id": "duplex_msg",
-					"text": map[string]interface{}{
-						"tag":     "lark_md",
-						"content": "第一面已完成。请取出纸张**翻面**后放回纸盒，点击继续。",
-					},
+					"content":    "第一面已完成。请取出纸张**翻面**后放回纸盒，点击继续。",
 				},
 				map[string]interface{}{
-					"tag":        "button",
-					"element_id": "continue_duplex_btn",
-					"text":       map[string]interface{}{"tag": "plain_text", "content": "已翻面，继续打印"},
-					"type":       "primary",
-					"behaviors": []interface{}{
-						map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "continue_duplex", "token": token}},
-					},
-				},
-				map[string]interface{}{
-					"tag":        "button",
-					"element_id": "cancel_duplex_btn",
-					"text":       map[string]interface{}{"tag": "plain_text", "content": "取消剩余"},
-					"type":       "default",
-					"behaviors": []interface{}{
-						map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "cancel_duplex", "token": token}},
+					"tag":                "column_set",
+					"element_id":         "duplex_btn_cols",
+					"flex_mode":          "bisect",
+					"horizontal_spacing": "8px",
+					"horizontal_align":   "right",
+					"columns": []interface{}{
+						map[string]interface{}{
+							"tag":   "column",
+							"width": "auto",
+							"elements": []interface{}{
+								map[string]interface{}{
+									"tag":        "button",
+									"element_id": "continue_duplex_btn",
+									"text":       map[string]interface{}{"tag": "plain_text", "content": "已翻面，继续打印"},
+									"type":       "primary",
+									"behaviors": []interface{}{
+										map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "continue_duplex", "token": token}},
+									},
+								},
+							},
+						},
+						map[string]interface{}{
+							"tag":   "column",
+							"width": "auto",
+							"elements": []interface{}{
+								map[string]interface{}{
+									"tag":        "button",
+									"element_id": "cancel_duplex_btn",
+									"text":       map[string]interface{}{"tag": "plain_text", "content": "取消剩余"},
+									"type":       "default",
+									"behaviors": []interface{}{
+										map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "cancel_duplex", "token": token}},
+									},
+								},
+							},
+						},
 					},
 				},
 			},
 		},
-	},
+	}
 	b, _ := json.Marshal(card)
 	return string(b), nil
 }
@@ -853,4 +1135,3 @@ func handleBotDuplexCancel(cfg *config.Config, values map[string]interface{}) {
 	deleteManualDuplexPending(token)
 	log.Printf("[bot] manual duplex cancelled: token=%s", token)
 }
-

@@ -23,6 +23,8 @@ type manualDuplexPending struct {
 	PrinterID         string
 	RemainingFilePath string
 	Copies            int
+	OpenID            string
+	CardID            string
 	CreatedAt         time.Time
 	ExpiresAt         time.Time
 }
@@ -36,7 +38,7 @@ var manualDuplexStore = struct {
 	items: map[string]manualDuplexPending{},
 }
 
-func saveManualDuplexPending(jobID, printerID, remainingFilePath string, copies int) (string, time.Time, error) {
+func saveManualDuplexPending(jobID, printerID, remainingFilePath string, copies int, openID string) (string, time.Time, error) {
 	token, err := randomToken(16)
 	if err != nil {
 		return "", time.Time{}, err
@@ -53,6 +55,7 @@ func saveManualDuplexPending(jobID, printerID, remainingFilePath string, copies 
 		PrinterID:         printerID,
 		RemainingFilePath: remainingFilePath,
 		Copies:            copies,
+		OpenID:            openID,
 		CreatedAt:         now,
 		ExpiresAt:         expiresAt,
 	}
@@ -641,5 +644,5 @@ func applyNupLayout(sourcePath string, nup int) (string, func(), error) {
 		return sourcePath, func() {}, nil
 	}
 
-		return createNupPDF(sourcePath, nup, "horizontal", nil)
+	return createNupPDF(sourcePath, nup, "horizontal", nil)
 }

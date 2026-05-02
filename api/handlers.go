@@ -577,7 +577,7 @@ func SubmitPrintJob(c *gin.Context) {
 			return
 		}
 
-		token, expiresAt, err := saveManualDuplexPending(initialJobID, printerID, secondPassToStore, 1)
+		token, expiresAt, err := saveManualDuplexPending(initialJobID, printerID, secondPassToStore, 1, "")
 		if err != nil {
 			_ = os.Remove(secondPassToStore)
 			c.JSON(http.StatusInternalServerError, gin.H{
