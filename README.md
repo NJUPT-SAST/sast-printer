@@ -38,6 +38,16 @@ GoPrint 是一个基于 Golang 的打印后端服务，通过 CUPS/IPP 与系统
 go mod tidy
 ```
 
+或使用 Makefile：
+
+```bash
+make deps    # 安装依赖
+make run     # 启动开发服务器
+make build   # 编译到 bin/goprint
+make test    # 运行测试
+make clean   # 清理构建产物
+```
+
 2. 启动服务
 
 ```bash
