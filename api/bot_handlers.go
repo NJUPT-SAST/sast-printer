@@ -27,8 +27,7 @@ func initBotDispatcher() {
 			return nil
 		}).
 		OnP2CardActionTrigger(func(ctx context.Context, event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
-			go processCardAction(getConfig(), event)
-			return nil, nil
+			return processCardAction(ctx, getConfig(), event), nil
 		})
 }
 

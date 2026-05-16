@@ -20,9 +20,10 @@ type pendingJobTracker struct {
 }
 
 type trackedJob struct {
-	JobID     string
-	PrinterID string
-	LastCheck time.Time
+	JobID        string
+	PrinterID    string
+	RecordStatus string
+	LastCheck    time.Time
 }
 
 var (
@@ -56,6 +57,10 @@ func initJobStatusPoller(cfg *config.Config) *pendingJobTracker {
 
 // AddPendingJob 记录一个 pending 任务
 func (t *pendingJobTracker) AddPendingJob(jobID, printerID string) {
+	t.AddPendingJobWithStatus(jobID, printerID, "pending")
+}
+
+func (t *pendingJobTracker) AddPendingJobWithStatus(jobID, printerID, recordStatus string) {
 	if t == nil {
 		return
 	}
@@ -64,12 +69,13 @@ func (t *pendingJobTracker) AddPendingJob(jobID, printerID string) {
 	defer t.mu.Unlock()
 
 	t.jobs[jobID] = &trackedJob{
-		JobID:     jobID,
-		PrinterID: printerID,
-		LastCheck: time.Now(),
+		JobID:        jobID,
+		PrinterID:    printerID,
+		RecordStatus: strings.ToLower(strings.TrimSpace(recordStatus)),
+		LastCheck:    time.Now(),
 	}
 
-	log.Printf("[job-poller] tracked pending job job_id=%s printer=%s", jobID, printerID)
+	log.Printf("[job-poller] tracked pending job job_id=%s printer=%s record_status=%s", jobID, printerID, recordStatus)
 }
 
 func (t *pendingJobTracker) restorePendingJobs() {
@@ -95,9 +101,10 @@ func (t *pendingJobTracker) restorePendingJobs() {
 	defer t.mu.Unlock()
 	for _, j := range jobs {
 		t.jobs[j.JobID] = &trackedJob{
-			JobID:     j.JobID,
-			PrinterID: j.PrinterID,
-			LastCheck: time.Now(),
+			JobID:        j.JobID,
+			PrinterID:    j.PrinterID,
+			RecordStatus: j.Status,
+			LastCheck:    time.Now(),
 		}
 	}
 	log.Printf("[job-poller] restored pending jobs count=%d", len(jobs))
@@ -165,6 +172,12 @@ func (t *pendingJobTracker) checkPendingJobs() {
 
 		// 如果任务不再是 pending，更新表格并移除跟踪
 		if job.Status != "pending" && job.Status != "held" && job.Status != "processing" {
+			if tracked.RecordStatus == "pending_manual_continue" && job.Status == "completed" {
+				log.Printf("[job-poller] manual duplex first pass completed job_id=%s, keep record waiting for continue", jobID)
+				t.removePendingJob(jobID)
+				continue
+			}
+
 			log.Printf("[job-poller] job completed job_id=%s old_status=pending new_status=%s", jobID, job.Status)
 
 			if err := t.store.UpdateJobStatus(ctx, jobID, job.Status); err != nil {

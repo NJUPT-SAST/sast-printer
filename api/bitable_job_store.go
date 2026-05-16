@@ -425,56 +425,31 @@ func (s *bitableJobStore) UpdateJobStatus(ctx context.Context, jobID string, new
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
-	// 1. 查询所有记录以找到对应的 job_id
-	recordID := ""
-	pageToken := ""
-
-	for recordID == "" {
-		reqBuilder := larkbitable.NewListAppTableRecordReqBuilder().
-			AppToken(s.appToken).
-			TableId(s.tableID).
-			PageSize(100)
-		if pageToken != "" {
-			reqBuilder = reqBuilder.PageToken(pageToken)
-		}
-
-		resp, err := s.client.Bitable.AppTableRecord.List(ctx, reqBuilder.Build())
-		if err != nil {
-			return fmt.Errorf("bitable list records failed: %w", err)
-		}
-		if resp == nil || !resp.Success() || resp.Data == nil {
-			return fmt.Errorf("bitable list records failed: code=%d msg=%s", resp.Code, resp.Msg)
-		}
-
-		for _, item := range resp.Data.Items {
-			if item == nil {
-				continue
-			}
-			if fieldAsString(item.Fields[bitableFieldJobID]) == jobID {
-				if item.RecordId != nil {
-					recordID = *item.RecordId
-				}
-				break
-			}
-		}
-
-		if recordID != "" {
-			break
-		}
-
-		if resp.Data.HasMore == nil || !*resp.Data.HasMore || resp.Data.PageToken == nil || *resp.Data.PageToken == "" {
-			break
-		}
-		pageToken = *resp.Data.PageToken
-	}
-
-	if recordID == "" {
-		return fmt.Errorf("job_id not found in bitable: %s", jobID)
-	}
-
-	// 2. 更新记录的状态字段
-	fields := map[string]interface{}{
+	return s.updateJobFields(ctx, jobID, map[string]interface{}{
 		bitableFieldStatus: newStatus,
+	})
+}
+
+func (s *bitableJobStore) UpdateManualDuplexContinued(ctx context.Context, initialJobID string, continuedJobID string) error {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	continuedJobID = strings.TrimSpace(continuedJobID)
+	if continuedJobID == "" {
+		return fmt.Errorf("continued job_id is required")
+	}
+
+	return s.updateJobFields(ctx, initialJobID, map[string]interface{}{
+		bitableFieldJobID:      continuedJobID,
+		bitableFieldStatus:     "pending",
+		bitableFieldDuplexHook: "",
+	})
+}
+
+func (s *bitableJobStore) updateJobFields(ctx context.Context, jobID string, fields map[string]interface{}) error {
+	recordID, err := s.findRecordIDByJobID(ctx, jobID)
+	if err != nil {
+		return err
 	}
 
 	req := larkbitable.NewUpdateAppTableRecordReqBuilder().
@@ -498,6 +473,55 @@ func (s *bitableJobStore) UpdateJobStatus(ctx context.Context, jobID string, new
 	}
 
 	return nil
+}
+
+func (s *bitableJobStore) findRecordIDByJobID(ctx context.Context, jobID string) (string, error) {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return "", fmt.Errorf("job_id is required")
+	}
+
+	pageToken := ""
+
+	for {
+		reqBuilder := larkbitable.NewListAppTableRecordReqBuilder().
+			AppToken(s.appToken).
+			TableId(s.tableID).
+			PageSize(100)
+		if pageToken != "" {
+			reqBuilder = reqBuilder.PageToken(pageToken)
+		}
+
+		resp, err := s.client.Bitable.AppTableRecord.List(ctx, reqBuilder.Build())
+		if err != nil {
+			return "", fmt.Errorf("bitable list records failed: %w", err)
+		}
+		if resp == nil || !resp.Success() || resp.Data == nil {
+			if resp == nil {
+				return "", fmt.Errorf("bitable list records failed: empty response")
+			}
+			return "", fmt.Errorf("bitable list records failed: code=%d msg=%s request_id=%s", resp.Code, resp.Msg, resp.RequestId())
+		}
+
+		for _, item := range resp.Data.Items {
+			if item == nil {
+				continue
+			}
+			if fieldAsString(item.Fields[bitableFieldJobID]) == jobID {
+				if item.RecordId != nil {
+					return *item.RecordId, nil
+				}
+				break
+			}
+		}
+
+		if resp.Data.HasMore == nil || !*resp.Data.HasMore || resp.Data.PageToken == nil || *resp.Data.PageToken == "" {
+			break
+		}
+		pageToken = *resp.Data.PageToken
+	}
+
+	return "", fmt.Errorf("job_id not found in bitable: %s", jobID)
 }
 
 // DeleteJobByUserAndJobID 根据当前用户和 job_id 删除多维表中的任务记录。

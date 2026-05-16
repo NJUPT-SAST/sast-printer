@@ -16,6 +16,29 @@ type printerOption struct {
 	Value string `json:"value"`
 }
 
+type printerSelectCardState struct {
+	Disabled          bool
+	NextButtonText    string
+	CancelButtonText  string
+	SelectedPrinterID string
+	StatusText        string
+}
+
+type printConfigCardState struct {
+	Disabled         bool
+	PrintButtonText  string
+	CancelButtonText string
+	PagesValue       string
+	StatusText       string
+}
+
+type duplexContinueCardState struct {
+	Disabled     bool
+	ContinueText string
+	CancelText   string
+	StatusText   string
+}
+
 func buildPrinterOptions(cfg *config.Config) []printerOption {
 	visible := cfg.VisiblePrinters()
 	opts := make([]printerOption, len(visible))
@@ -25,31 +48,16 @@ func buildPrinterOptions(cfg *config.Config) []printerOption {
 	return opts
 }
 
-func nupIndex(nup int) int {
-	switch nup {
-	case 2:
-		return 2
-	case 4:
-		return 3
-	case 6:
-		return 4
-	default:
-		return 1
+func optionInitialIndex(options []map[string]interface{}, selected string) int {
+	for i, opt := range options {
+		if value, ok := opt["value"].(string); ok && value == selected {
+			return i + 1
+		}
 	}
+	return 1
 }
 
-func duplexIndex(duplex string) int {
-	switch duplex {
-	case "auto":
-		return 2
-	case "manual":
-		return 3
-	default:
-		return 1
-	}
-}
-
-func buildPrintConfigCard(filename string, totalPages int, printers []printerOption, defaults config.FileTypeDefault, sessionID string) (string, error) {
+func buildPrinterSelectCardData(filename string, totalPages int, printers []printerOption, sessionID string, state printerSelectCardState) map[string]interface{} {
 	mkOptText := func(s string) map[string]interface{} {
 		return map[string]interface{}{"tag": "plain_text", "content": s}
 	}
@@ -61,32 +69,331 @@ func buildPrintConfigCard(filename string, totalPages int, printers []printerOpt
 		}
 	}
 
-	nupOptions := []map[string]interface{}{
+	selectedPrinterID := strings.TrimSpace(state.SelectedPrinterID)
+	if selectedPrinterID == "" && len(printers) > 0 {
+		selectedPrinterID = printers[0].ID
+	}
+	printerInitialIndex := optionInitialIndex(printerOpts, selectedPrinterID)
+
+	cancelButtonText := state.CancelButtonText
+	if cancelButtonText == "" {
+		cancelButtonText = "取消"
+	}
+	nextButtonText := state.NextButtonText
+	if nextButtonText == "" {
+		nextButtonText = "下一步"
+	}
+
+	cancelButton := map[string]interface{}{
+		"tag":        "button",
+		"element_id": "cancel_btn",
+		"text":       map[string]interface{}{"tag": "plain_text", "content": cancelButtonText},
+		"type":       "default",
+		"name":       "cancel_btn",
+	}
+	nextButton := map[string]interface{}{
+		"tag":        "button",
+		"element_id": "select_printer_btn",
+		"text":       map[string]interface{}{"tag": "plain_text", "content": nextButtonText},
+		"type":       "primary_filled",
+		"name":       "select_printer_btn",
+	}
+	if state.Disabled {
+		cancelButton["disabled"] = true
+		nextButton["disabled"] = true
+	} else {
+		cancelButton["form_action_type"] = "submit"
+		cancelButton["behaviors"] = []interface{}{
+			map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "cancel", "stage": "printer_select", "session_id": sessionID}},
+		}
+		nextButton["form_action_type"] = "submit"
+		nextButton["behaviors"] = []interface{}{
+			map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "select_printer", "session_id": sessionID, "printer_id": selectedPrinterID}},
+		}
+	}
+
+	bodyElements := []interface{}{
+		map[string]interface{}{
+			"tag":        "markdown",
+			"element_id": "file_info",
+			"content":    fmt.Sprintf("📄 **%s**　共 %d 页", filename, totalPages),
+		},
+		map[string]interface{}{
+			"tag":        "form",
+			"element_id": "printer_form",
+			"name":       "printer_form",
+			"elements": []interface{}{
+				map[string]interface{}{
+					"tag":           "select_static",
+					"element_id":    "printer_select",
+					"name":          "printer_id",
+					"placeholder":   map[string]interface{}{"tag": "plain_text", "content": "选择打印机"},
+					"options":       printerOpts,
+					"initial_index": printerInitialIndex,
+					"width":         "fill",
+				},
+				map[string]interface{}{
+					"tag":                "column_set",
+					"element_id":         "printer_btn_cols",
+					"flex_mode":          "bisect",
+					"horizontal_spacing": "8px",
+					"horizontal_align":   "right",
+					"columns": []interface{}{
+						map[string]interface{}{
+							"tag":      "column",
+							"width":    "auto",
+							"elements": []interface{}{cancelButton},
+						},
+						map[string]interface{}{
+							"tag":      "column",
+							"width":    "auto",
+							"elements": []interface{}{nextButton},
+						},
+					},
+				},
+			},
+		},
+	}
+	if strings.TrimSpace(state.StatusText) != "" {
+		bodyElements = append(bodyElements, map[string]interface{}{
+			"tag":        "markdown",
+			"element_id": "status_hint",
+			"content":    state.StatusText,
+		})
+	}
+	bodyElements = append(bodyElements,
+		map[string]interface{}{"tag": "hr", "element_id": "divider"},
+		map[string]interface{}{
+			"tag":        "markdown",
+			"element_id": "timeout_hint",
+			"content":    fmt.Sprintf("⏰ %d 分钟后自动取消任务", int(botCardTTL().Minutes())),
+		},
+	)
+
+	return map[string]interface{}{
+		"schema": "2.0",
+		"header": map[string]interface{}{
+			"template": "blue",
+			"title": map[string]interface{}{
+				"tag":     "plain_text",
+				"content": "🖨️ 选择打印机",
+			},
+		},
+		"body": map[string]interface{}{
+			"elements": bodyElements,
+		},
+	}
+}
+
+func buildPrinterSelectCard(filename string, totalPages int, printers []printerOption, sessionID string) (string, error) {
+	b, err := json.Marshal(buildPrinterSelectCardData(filename, totalPages, printers, sessionID, printerSelectCardState{}))
+	return string(b), err
+}
+
+func buildNupOptions() []map[string]interface{} {
+	mkOptText := func(s string) map[string]interface{} {
+		return map[string]interface{}{"tag": "plain_text", "content": s}
+	}
+	return []map[string]interface{}{
 		{"text": mkOptText("1-up (不缩印)"), "value": "1"},
 		{"text": mkOptText("2-up"), "value": "2"},
 		{"text": mkOptText("4-up"), "value": "4"},
 		{"text": mkOptText("6-up"), "value": "6"},
 	}
-	duplexOptions := []map[string]interface{}{
-		{"text": mkOptText("单面"), "value": "off"},
-		{"text": mkOptText("双面（自动）"), "value": "auto"},
-		{"text": mkOptText("双面（手动）"), "value": "manual"},
-	}
+}
 
+func buildDuplexOptions(printer config.PrinterConfig) []map[string]interface{} {
+	mkOptText := func(s string) map[string]interface{} {
+		return map[string]interface{}{"tag": "plain_text", "content": s}
+	}
+	options := []map[string]interface{}{
+		{"text": mkOptText("单面"), "value": "off"},
+	}
+	switch printer.NormalizedDuplexMode() {
+	case "auto":
+		options = append(options, map[string]interface{}{"text": mkOptText("双面（自动）"), "value": "auto"})
+	case "manual":
+		options = append(options, map[string]interface{}{"text": mkOptText("双面（手动）"), "value": "manual"})
+	}
+	return options
+}
+
+func isPrinterDuplexOptionSupported(printer config.PrinterConfig, duplex string) bool {
+	switch strings.TrimSpace(strings.ToLower(duplex)) {
+	case "", "off":
+		return true
+	case "auto":
+		return printer.NormalizedDuplexMode() == "auto"
+	case "manual":
+		return printer.NormalizedDuplexMode() == "manual"
+	default:
+		return false
+	}
+}
+
+func normalizeDefaultsForPrinter(defaults config.FileTypeDefault, printer config.PrinterConfig) config.FileTypeDefault {
+	if defaults.Copies < 1 {
+		defaults.Copies = 1
+	}
+	if !validNup(defaults.Nup) {
+		defaults.Nup = 1
+	}
+	if !isPrinterDuplexOptionSupported(printer, defaults.Duplex) {
+		defaults.Duplex = "off"
+	}
+	return defaults
+}
+
+func buildPrintConfigCardData(filename string, totalPages int, printer config.PrinterConfig, defaults config.FileTypeDefault, sessionID string, state printConfigCardState) map[string]interface{} {
+	nupOptions := buildNupOptions()
+	duplexOptions := buildDuplexOptions(printer)
+
+	defaults = normalizeDefaultsForPrinter(defaults, printer)
 	copies := defaults.Copies
-	if copies < 1 {
-		copies = 1
-	}
 	nup := defaults.Nup
-	if nup < 1 {
-		nup = 1
-	}
 	duplex := defaults.Duplex
 	if duplex == "" {
 		duplex = "off"
 	}
+	pagesValue := fmt.Sprintf("1-%d", totalPages)
+	if strings.TrimSpace(state.PagesValue) != "" {
+		pagesValue = strings.TrimSpace(state.PagesValue)
+	}
 
-	card := map[string]interface{}{
+	cancelButtonText := state.CancelButtonText
+	if cancelButtonText == "" {
+		cancelButtonText = "取消"
+	}
+	printButtonText := state.PrintButtonText
+	if printButtonText == "" {
+		printButtonText = "开始打印"
+	}
+
+	cancelButton := map[string]interface{}{
+		"tag":        "button",
+		"element_id": "cancel_btn",
+		"text":       map[string]interface{}{"tag": "plain_text", "content": cancelButtonText},
+		"type":       "default",
+		"name":       "cancel_btn",
+	}
+	printButton := map[string]interface{}{
+		"tag":        "button",
+		"element_id": "print_btn",
+		"text":       map[string]interface{}{"tag": "plain_text", "content": printButtonText},
+		"type":       "primary_filled",
+		"name":       "print_btn",
+	}
+	if state.Disabled {
+		cancelButton["disabled"] = true
+		printButton["disabled"] = true
+	} else {
+		cancelButton["form_action_type"] = "submit"
+		cancelButton["behaviors"] = []interface{}{
+			map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "cancel", "stage": "print_details", "session_id": sessionID, "printer_id": printer.ID}},
+		}
+		cancelButton["confirm"] = map[string]interface{}{
+			"title": map[string]interface{}{"tag": "plain_text", "content": "取消打印？"},
+			"text":  map[string]interface{}{"tag": "plain_text", "content": "将取消本次打印配置"},
+		}
+		printButton["form_action_type"] = "submit"
+		printButton["behaviors"] = []interface{}{
+			map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "print", "session_id": sessionID, "printer_id": printer.ID}},
+		}
+		printButton["confirm"] = map[string]interface{}{
+			"title": map[string]interface{}{"tag": "plain_text", "content": "确认打印？"},
+			"text":  map[string]interface{}{"tag": "plain_text", "content": "将按所选参数提交打印任务"},
+		}
+	}
+
+	bodyElements := []interface{}{
+		map[string]interface{}{
+			"tag":        "markdown",
+			"element_id": "file_info",
+			"content":    fmt.Sprintf("📄 **%s**　共 %d 页", filename, totalPages),
+		},
+		map[string]interface{}{
+			"tag":        "markdown",
+			"element_id": "selected_printer_info",
+			"content":    fmt.Sprintf("🖨️ 打印机：**%s**", printer.ID),
+		},
+		map[string]interface{}{
+			"tag":        "form",
+			"element_id": "print_form",
+			"name":       "print_form",
+			"elements": []interface{}{
+				map[string]interface{}{
+					"tag":           "input",
+					"element_id":    "copies_input",
+					"name":          "copies",
+					"label":         map[string]interface{}{"tag": "plain_text", "content": "份数"},
+					"default_value": fmt.Sprintf("%d", copies),
+					"width":         "fill",
+				},
+				map[string]interface{}{
+					"tag":           "input",
+					"element_id":    "pages_input",
+					"name":          "pages",
+					"label":         map[string]interface{}{"tag": "plain_text", "content": "页码范围"},
+					"default_value": pagesValue,
+					"width":         "fill",
+				},
+				map[string]interface{}{
+					"tag":           "select_static",
+					"element_id":    "nup_select",
+					"name":          "nup",
+					"placeholder":   map[string]interface{}{"tag": "plain_text", "content": "缩印"},
+					"options":       nupOptions,
+					"initial_index": optionInitialIndex(nupOptions, strconv.Itoa(nup)),
+					"width":         "fill",
+				},
+				map[string]interface{}{
+					"tag":           "select_static",
+					"element_id":    "duplex_select",
+					"name":          "duplex",
+					"placeholder":   map[string]interface{}{"tag": "plain_text", "content": "单双面"},
+					"options":       duplexOptions,
+					"initial_index": optionInitialIndex(duplexOptions, duplex),
+					"width":         "fill",
+				},
+				map[string]interface{}{
+					"tag":                "column_set",
+					"element_id":         "btn_cols",
+					"flex_mode":          "bisect",
+					"horizontal_spacing": "8px",
+					"horizontal_align":   "right",
+					"columns": []interface{}{
+						map[string]interface{}{
+							"tag":      "column",
+							"width":    "auto",
+							"elements": []interface{}{cancelButton},
+						},
+						map[string]interface{}{
+							"tag":      "column",
+							"width":    "auto",
+							"elements": []interface{}{printButton},
+						},
+					},
+				},
+			},
+		},
+	}
+	if strings.TrimSpace(state.StatusText) != "" {
+		bodyElements = append(bodyElements, map[string]interface{}{
+			"tag":        "markdown",
+			"element_id": "status_hint",
+			"content":    state.StatusText,
+		})
+	}
+	bodyElements = append(bodyElements,
+		map[string]interface{}{"tag": "hr", "element_id": "divider"},
+		map[string]interface{}{
+			"tag":        "markdown",
+			"element_id": "timeout_hint",
+			"content":    fmt.Sprintf("⏰ %d 分钟后自动取消任务", int(botCardTTL().Minutes())),
+		},
+	)
+
+	return map[string]interface{}{
 		"schema": "2.0",
 		"header": map[string]interface{}{
 			"template": "blue",
@@ -96,129 +403,43 @@ func buildPrintConfigCard(filename string, totalPages int, printers []printerOpt
 			},
 		},
 		"body": map[string]interface{}{
-			"elements": []interface{}{
-				map[string]interface{}{
-					"tag":        "markdown",
-					"element_id": "file_info",
-					"content":    fmt.Sprintf("📄 **%s**　共 %d 页", filename, totalPages),
-				},
-				map[string]interface{}{
-					"tag":        "form",
-					"element_id": "print_form",
-					"name":       "print_form",
-					"elements": []interface{}{
-						map[string]interface{}{
-							"tag":           "select_static",
-							"element_id":    "printer_select",
-							"name":          "printer_id",
-							"placeholder":   map[string]interface{}{"tag": "plain_text", "content": "选择打印机"},
-							"options":       printerOpts,
-							"initial_index": 1,
-							"width":         "fill",
-						},
-						map[string]interface{}{
-							"tag":           "input",
-							"element_id":    "copies_input",
-							"name":          "copies",
-							"label":         map[string]interface{}{"tag": "plain_text", "content": "份数"},
-							"default_value": fmt.Sprintf("%d", copies),
-							"width":         "fill",
-						},
-						map[string]interface{}{
-							"tag":           "input",
-							"element_id":    "pages_input",
-							"name":          "pages",
-							"label":         map[string]interface{}{"tag": "plain_text", "content": "页码范围"},
-							"default_value": fmt.Sprintf("1-%d", totalPages),
-							"width":         "fill",
-						},
-						map[string]interface{}{
-							"tag":           "select_static",
-							"element_id":    "nup_select",
-							"name":          "nup",
-							"placeholder":   map[string]interface{}{"tag": "plain_text", "content": "缩印"},
-							"options":       nupOptions,
-							"initial_index": nupIndex(nup),
-							"width":         "fill",
-						},
-						map[string]interface{}{
-							"tag":           "select_static",
-							"element_id":    "duplex_select",
-							"name":          "duplex",
-							"placeholder":   map[string]interface{}{"tag": "plain_text", "content": "单双面"},
-							"options":       duplexOptions,
-							"initial_index": duplexIndex(duplex),
-							"width":         "fill",
-						},
-						map[string]interface{}{
-							"tag":                "column_set",
-							"element_id":         "btn_cols",
-							"flex_mode":          "bisect",
-							"horizontal_spacing": "8px",
-							"horizontal_align":   "right",
-							"columns": []interface{}{
-								map[string]interface{}{
-									"tag":   "column",
-									"width": "auto",
-									"elements": []interface{}{
-										map[string]interface{}{
-											"tag":              "button",
-											"element_id":       "cancel_btn",
-											"text":             map[string]interface{}{"tag": "plain_text", "content": "取消"},
-											"type":             "default",
-											"form_action_type": "reset",
-											"name":             "cancel_btn",
-										},
-									},
-								},
-								map[string]interface{}{
-									"tag":   "column",
-									"width": "auto",
-									"elements": []interface{}{
-										map[string]interface{}{
-											"tag":              "button",
-											"element_id":       "print_btn",
-											"text":             map[string]interface{}{"tag": "plain_text", "content": "开始打印"},
-											"type":             "primary_filled",
-											"form_action_type": "submit",
-											"name":             "print_btn",
-											"behaviors": []interface{}{
-												map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "print", "session_id": sessionID}},
-											},
-											"confirm": map[string]interface{}{
-												"title": map[string]interface{}{"tag": "plain_text", "content": "确认打印？"},
-												"text":  map[string]interface{}{"tag": "plain_text", "content": "将按所选参数提交打印任务"},
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-				map[string]interface{}{"tag": "hr", "element_id": "divider"},
-				map[string]interface{}{
-					"tag":        "markdown",
-					"element_id": "timeout_hint",
-					"content":    fmt.Sprintf("⏰ %d 分钟后自动取消任务", int(botCardTTL().Minutes())),
-				},
-			},
+			"elements": bodyElements,
 		},
 	}
+}
 
-	b, err := json.Marshal(card)
+func buildPrintConfigCard(filename string, totalPages int, printer config.PrinterConfig, defaults config.FileTypeDefault, sessionID string) (string, error) {
+	b, err := json.Marshal(buildPrintConfigCardData(filename, totalPages, printer, defaults, sessionID, printConfigCardState{}))
 	return string(b), err
 }
 
 func resendPrintConfigCard(cfg *config.Config, session botCardSession, sessionID, chatID, idType string) {
-	pages, err := countPDFPages(session.SourcePath)
-	if err != nil {
-		log.Printf("[bot] recount pages for resend: %v", err)
-		return
+	pages := session.TotalPages
+	if pages <= 0 {
+		var err error
+		pages, err = countPDFPages(session.SourcePath)
+		if err != nil {
+			log.Printf("[bot] recount pages for resend: %v", err)
+			return
+		}
 	}
+
+	printerID := session.PrinterID
+	printer, err := resolveVisibleBotPrinter(cfg, printerID)
+	if err != nil {
+		visible := cfg.VisiblePrinters()
+		if len(visible) == 0 {
+			log.Printf("[bot] no visible printer for resend session=%s", sessionID)
+			return
+		}
+		printer = visible[0]
+	}
+
 	defaults := cfg.ResolveFileTypeDefault(session.Filename)
-	printers := buildPrinterOptions(cfg)
-	card, err := buildPrintConfigCard(session.Filename, pages, printers, defaults, sessionID)
+	if session.IsCloudDoc {
+		defaults = cfg.CloudDocDefault()
+	}
+	card, err := buildPrintConfigCard(session.Filename, pages, printer, defaults, sessionID)
 	if err != nil {
 		log.Printf("[bot] rebuild card for resend: %v", err)
 		return
@@ -289,8 +510,75 @@ func buildJobSubmittedCard(jobID, printerID, filename string, copies int, duplex
 	return string(b), nil
 }
 
-func buildDuplexContinueCard(token string) (string, error) {
-	card := map[string]interface{}{
+func buildDuplexContinueCardData(token string, state duplexContinueCardState) map[string]interface{} {
+	continueText := state.ContinueText
+	if continueText == "" {
+		continueText = "已翻面，继续打印"
+	}
+	cancelText := state.CancelText
+	if cancelText == "" {
+		cancelText = "取消剩余"
+	}
+
+	continueButton := map[string]interface{}{
+		"tag":        "button",
+		"element_id": "continue_duplex_btn",
+		"text":       map[string]interface{}{"tag": "plain_text", "content": continueText},
+		"type":       "primary",
+	}
+	cancelButton := map[string]interface{}{
+		"tag":        "button",
+		"element_id": "cancel_duplex_btn",
+		"text":       map[string]interface{}{"tag": "plain_text", "content": cancelText},
+		"type":       "default",
+	}
+	if state.Disabled {
+		continueButton["disabled"] = true
+		cancelButton["disabled"] = true
+	} else {
+		continueButton["behaviors"] = []interface{}{
+			map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "continue_duplex", "token": token}},
+		}
+		cancelButton["behaviors"] = []interface{}{
+			map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "cancel_duplex", "token": token}},
+		}
+	}
+
+	bodyElements := []interface{}{
+		map[string]interface{}{
+			"tag":        "markdown",
+			"element_id": "duplex_msg",
+			"content":    "第一面已完成。请取出纸张**翻面**后放回纸盒，点击继续。",
+		},
+		map[string]interface{}{
+			"tag":                "column_set",
+			"element_id":         "duplex_btn_cols",
+			"flex_mode":          "bisect",
+			"horizontal_spacing": "8px",
+			"horizontal_align":   "right",
+			"columns": []interface{}{
+				map[string]interface{}{
+					"tag":      "column",
+					"width":    "auto",
+					"elements": []interface{}{continueButton},
+				},
+				map[string]interface{}{
+					"tag":      "column",
+					"width":    "auto",
+					"elements": []interface{}{cancelButton},
+				},
+			},
+		},
+	}
+	if strings.TrimSpace(state.StatusText) != "" {
+		bodyElements = append(bodyElements, map[string]interface{}{
+			"tag":        "markdown",
+			"element_id": "duplex_status",
+			"content":    state.StatusText,
+		})
+	}
+
+	return map[string]interface{}{
 		"schema": "2.0",
 		"header": map[string]interface{}{
 			"template": "orange",
@@ -300,54 +588,13 @@ func buildDuplexContinueCard(token string) (string, error) {
 			},
 		},
 		"body": map[string]interface{}{
-			"elements": []interface{}{
-				map[string]interface{}{
-					"tag":        "markdown",
-					"element_id": "duplex_msg",
-					"content":    "第一面已完成。请取出纸张**翻面**后放回纸盒，点击继续。",
-				},
-				map[string]interface{}{
-					"tag":                "column_set",
-					"element_id":         "duplex_btn_cols",
-					"flex_mode":          "bisect",
-					"horizontal_spacing": "8px",
-					"horizontal_align":   "right",
-					"columns": []interface{}{
-						map[string]interface{}{
-							"tag":   "column",
-							"width": "auto",
-							"elements": []interface{}{
-								map[string]interface{}{
-									"tag":        "button",
-									"element_id": "continue_duplex_btn",
-									"text":       map[string]interface{}{"tag": "plain_text", "content": "已翻面，继续打印"},
-									"type":       "primary",
-									"behaviors": []interface{}{
-										map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "continue_duplex", "token": token}},
-									},
-								},
-							},
-						},
-						map[string]interface{}{
-							"tag":   "column",
-							"width": "auto",
-							"elements": []interface{}{
-								map[string]interface{}{
-									"tag":        "button",
-									"element_id": "cancel_duplex_btn",
-									"text":       map[string]interface{}{"tag": "plain_text", "content": "取消剩余"},
-									"type":       "default",
-									"behaviors": []interface{}{
-										map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "cancel_duplex", "token": token}},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
+			"elements": bodyElements,
 		},
 	}
+}
+
+func buildDuplexContinueCard(token string) (string, error) {
+	card := buildDuplexContinueCardData(token, duplexContinueCardState{})
 	b, _ := json.Marshal(card)
 	return string(b), nil
 }

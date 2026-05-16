@@ -656,7 +656,7 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 
 			tracker := initJobStatusPoller(cfg)
 			if tracker != nil {
-				tracker.AddPendingJob(initialJobID, printerID)
+				tracker.AddPendingJobWithStatus(initialJobID, printerID, "pending_manual_continue")
 			}
 		}
 		return

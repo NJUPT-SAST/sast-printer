@@ -13,6 +13,8 @@ import (
 type botCardSession struct {
 	SourcePath         string
 	Filename           string
+	IsCloudDoc         bool
+	TotalPages         int
 	PrinterID          string
 	ChatID             string
 	ChatType           string
@@ -21,6 +23,7 @@ type botCardSession struct {
 	EphemeralMessageID string
 	ReplyMessageID     string
 	CreatedAt          time.Time
+	ActionInProgress   bool
 }
 
 func persistSessionFile(sourcePath string) (string, error) {
@@ -86,10 +89,55 @@ func saveBotSession(id string, s botCardSession) {
 	botSessions[id] = s
 }
 
+func updateBotSessionPrinter(id, printerID string) {
+	botSessionsMu.Lock()
+	defer botSessionsMu.Unlock()
+
+	s, ok := botSessions[id]
+	if !ok {
+		return
+	}
+	s.PrinterID = printerID
+	botSessions[id] = s
+}
+
 func deleteBotSession(id string) {
 	botSessionsMu.Lock()
 	defer botSessionsMu.Unlock()
 	delete(botSessions, id)
+}
+
+func claimBotSessionAction(id string) (botCardSession, bool) {
+	botSessionsMu.Lock()
+	defer botSessionsMu.Unlock()
+
+	s, ok := botSessions[id]
+	if !ok {
+		return botCardSession{}, false
+	}
+	if time.Since(s.CreatedAt) > botCardTTL() {
+		_ = os.Remove(s.SourcePath)
+		delete(botSessions, id)
+		return botCardSession{}, false
+	}
+	if s.ActionInProgress {
+		return botCardSession{}, false
+	}
+	s.ActionInProgress = true
+	botSessions[id] = s
+	return s, true
+}
+
+func releaseBotSessionAction(id string) {
+	botSessionsMu.Lock()
+	defer botSessionsMu.Unlock()
+
+	s, ok := botSessions[id]
+	if !ok {
+		return
+	}
+	s.ActionInProgress = false
+	botSessions[id] = s
 }
 
 func getBotSession(id string) (botCardSession, bool) {

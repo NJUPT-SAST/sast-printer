@@ -127,10 +127,6 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 		return
 	}
 
-	defaults := cfg.ResolveFileTypeDefault(filename)
-	if isCloudDoc {
-		defaults = cfg.CloudDocDefault()
-	}
 	printers := buildPrinterOptions(cfg)
 	if len(printers) == 0 {
 		_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, "没有可用的打印机", messageID)
@@ -139,7 +135,7 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 
 	sessionID := fmt.Sprintf("%s-%d", chatID, time.Now().UnixNano())
 
-	card, err := buildPrintConfigCard(filename, pages, printers, defaults, sessionID)
+	card, err := buildPrinterSelectCard(filename, pages, printers, sessionID)
 	if err != nil {
 		_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, "构建卡片失败", messageID)
 		return
@@ -162,6 +158,8 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 		ReplyMessageID:     messageID,
 		SourcePath:         persistedPath,
 		Filename:           filename,
+		IsCloudDoc:         isCloudDoc,
+		TotalPages:         pages,
 		PrinterID:          printers[0].ID,
 		ChatID:             chatID,
 		RequesterOpenID:    requesterOpenID,
@@ -207,40 +205,304 @@ func downloadBotFile(ctx context.Context, cfg *config.Config, messageID, fileKey
 	return outPath, fileName, func() { _ = os.Remove(outPath) }, nil
 }
 
-func processCardAction(cfg *config.Config, event *callback.CardActionTriggerEvent) {
+func processCardAction(_ context.Context, cfg *config.Config, event *callback.CardActionTriggerEvent) *callback.CardActionTriggerResponse {
 	if event == nil || event.Event == nil || event.Event.Action == nil {
-		return
+		return nil
 	}
 	// Merge button callback value with form component values (v2 form container)
-	values := event.Event.Action.Value
-	if values == nil {
-		values = make(map[string]interface{})
+	values := make(map[string]interface{}, len(event.Event.Action.Value)+len(event.Event.Action.FormValue))
+	for k, v := range event.Event.Action.Value {
+		values[k] = v
 	}
 	for k, v := range event.Event.Action.FormValue {
 		values[k] = v
 	}
-	openID := event.Event.Operator.OpenID
+	openID := ""
+	if event.Event.Operator != nil {
+		openID = event.Event.Operator.OpenID
+	}
 
 	switch cardStr(values, "action") {
+	case "select_printer":
+		resp, ok := buildSelectedPrinterActionResponse(cfg, values, openID)
+		if ok {
+			updateBotSessionPrinter(cardStr(values, "session_id"), cardStr(values, "printer_id"))
+		}
+		return resp
 	case "cancel":
-		log.Printf("[bot] card action: cancel")
+		var resp *callback.CardActionTriggerResponse
+		var ok bool
+		if cardStr(values, "stage") == "printer_select" {
+			resp, ok = buildPrinterSelectActionResponse(cfg, values, openID, printerSelectCardState{
+				Disabled:          true,
+				NextButtonText:    "已取消",
+				CancelButtonText:  "已取消",
+				SelectedPrinterID: cardStr(values, "printer_id"),
+				StatusText:        "✅ 已取消本次打印任务",
+			})
+		} else {
+			resp, ok = buildPrintCardActionResponse(cfg, values, openID, printConfigCardState{
+				Disabled:         true,
+				PrintButtonText:  "已取消",
+				CancelButtonText: "已取消",
+				StatusText:       "✅ 已取消本次打印任务",
+			})
+		}
+		if ok {
+			go handleBotCancel(cfg, values, openID)
+		}
+		return resp
 	case "print":
-		handleBotPrint(cfg, values, openID)
+		resp, ok := buildPrintCardActionResponse(cfg, values, openID, printConfigCardState{
+			Disabled:        true,
+			PrintButtonText: "处理中...",
+			StatusText:      "⏳ 已收到打印请求，正在提交任务",
+		})
+		if ok {
+			go handleBotPrint(cfg, values, openID)
+		}
+		return resp
 	case "continue_duplex":
-		handleBotDuplexContinue(cfg, values, openID)
+		resp, ok := buildDuplexCardActionResponse(values, openID, duplexContinueCardState{
+			Disabled:     true,
+			ContinueText: "处理中...",
+			StatusText:   "⏳ 已收到请求，正在提交第二面",
+		})
+		if ok {
+			go handleBotDuplexContinue(cfg, values, openID)
+		}
+		return resp
 	case "cancel_duplex":
-		handleBotDuplexCancel(cfg, values, openID)
+		resp, ok := buildDuplexCardActionResponse(values, openID, duplexContinueCardState{
+			Disabled:     true,
+			ContinueText: "已取消",
+			CancelText:   "已取消",
+			StatusText:   "✅ 已取消剩余打印",
+		})
+		if ok {
+			go handleBotDuplexCancel(cfg, values, openID)
+		}
+		return resp
 	}
+	return nil
+}
+
+func buildPrinterSelectActionResponse(cfg *config.Config, values map[string]interface{}, openID string, state printerSelectCardState) (*callback.CardActionTriggerResponse, bool) {
+	sessionID := cardStr(values, "session_id")
+	session, ok := getBotSession(sessionID)
+	if !ok {
+		return cardActionToast("warning", "卡片已失效，请重新发送文件"), false
+	}
+	if session.RequesterOpenID != "" && openID != "" && openID != session.RequesterOpenID {
+		return cardActionToast("error", "这张打印卡片不属于你，请由发起人确认。"), false
+	}
+	shouldProcess := !session.ActionInProgress
+	if session.ActionInProgress {
+		state.Disabled = true
+		state.NextButtonText = "处理中..."
+		state.CancelButtonText = "处理中..."
+		state.StatusText = "⏳ 请求正在处理，请勿重复点击"
+	}
+
+	pages := session.TotalPages
+	if pages <= 0 {
+		var err error
+		pages, err = countPDFPages(session.SourcePath)
+		if err != nil {
+			log.Printf("[bot] build printer select card session=%s: %v", sessionID, err)
+			return cardActionToast("info", "已收到请求"), shouldProcess
+		}
+	}
+	return &callback.CardActionTriggerResponse{
+		Toast: &callback.Toast{Type: "success", Content: "已收到请求"},
+		Card:  &callback.Card{Type: "raw", Data: buildPrinterSelectCardData(session.Filename, pages, buildPrinterOptions(cfg), sessionID, state)},
+	}, shouldProcess
+}
+
+func buildSelectedPrinterActionResponse(cfg *config.Config, values map[string]interface{}, openID string) (*callback.CardActionTriggerResponse, bool) {
+	sessionID := cardStr(values, "session_id")
+	session, ok := getBotSession(sessionID)
+	if !ok {
+		return cardActionToast("warning", "卡片已失效，请重新发送文件"), false
+	}
+	if session.RequesterOpenID != "" && openID != "" && openID != session.RequesterOpenID {
+		return cardActionToast("error", "这张打印卡片不属于你，请由发起人确认。"), false
+	}
+	if session.ActionInProgress {
+		return buildPrinterSelectActionResponse(cfg, values, openID, printerSelectCardState{
+			Disabled:          true,
+			NextButtonText:    "处理中...",
+			CancelButtonText:  "处理中...",
+			SelectedPrinterID: cardStr(values, "printer_id"),
+			StatusText:        "⏳ 请求正在处理，请勿重复点击",
+		})
+	}
+
+	printer, err := resolveVisibleBotPrinter(cfg, cardStr(values, "printer_id"))
+	if err != nil {
+		log.Printf("[bot] select printer invalid session=%s: %v", sessionID, err)
+		return cardActionToast("error", "请选择可用的打印机"), false
+	}
+
+	pages := session.TotalPages
+	if pages <= 0 {
+		pages, err = countPDFPages(session.SourcePath)
+		if err != nil {
+			log.Printf("[bot] count pages for selected printer session=%s: %v", sessionID, err)
+			return cardActionToast("error", "无法读取文件页数"), false
+		}
+	}
+
+	defaults := botSessionDefaults(cfg, session)
+	return &callback.CardActionTriggerResponse{
+		Toast: &callback.Toast{Type: "success", Content: "已选择打印机"},
+		Card:  &callback.Card{Type: "raw", Data: buildPrintConfigCardData(session.Filename, pages, printer, defaults, sessionID, printConfigCardState{})},
+	}, true
+}
+
+func buildPrintCardActionResponse(cfg *config.Config, values map[string]interface{}, openID string, state printConfigCardState) (*callback.CardActionTriggerResponse, bool) {
+	sessionID := cardStr(values, "session_id")
+	session, ok := getBotSession(sessionID)
+	if !ok {
+		return cardActionToast("warning", "卡片已失效，请重新发送文件"), false
+	}
+	if session.RequesterOpenID != "" && openID != "" && openID != session.RequesterOpenID {
+		return cardActionToast("error", "这张打印卡片不属于你，请由发起人确认。"), false
+	}
+	shouldProcess := !session.ActionInProgress
+	if session.ActionInProgress {
+		state.Disabled = true
+		state.PrintButtonText = "处理中..."
+		state.CancelButtonText = "处理中..."
+		state.StatusText = "⏳ 打印请求正在处理，请勿重复点击"
+	}
+
+	card, err := buildDisabledPrintConfigCardData(cfg, session, sessionID, values, state)
+	if err != nil {
+		log.Printf("[bot] build disabled action card session=%s: %v", sessionID, err)
+		return cardActionToast("info", "已收到请求"), shouldProcess
+	}
+	return &callback.CardActionTriggerResponse{
+		Toast: &callback.Toast{Type: "success", Content: "已收到请求"},
+		Card:  &callback.Card{Type: "raw", Data: card},
+	}, shouldProcess
+}
+
+func cardActionToast(toastType, content string) *callback.CardActionTriggerResponse {
+	return &callback.CardActionTriggerResponse{
+		Toast: &callback.Toast{Type: toastType, Content: content},
+	}
+}
+
+func botSessionDefaults(cfg *config.Config, session botCardSession) config.FileTypeDefault {
+	if session.IsCloudDoc {
+		return cfg.CloudDocDefault()
+	}
+	return cfg.ResolveFileTypeDefault(session.Filename)
+}
+
+func resolveVisibleBotPrinter(cfg *config.Config, printerID string) (config.PrinterConfig, error) {
+	printerID = strings.TrimSpace(printerID)
+	if printerID == "" {
+		return config.PrinterConfig{}, fmt.Errorf("printer_id is required")
+	}
+	printer, ok := cfg.GetPrinterByID(printerID)
+	if !ok {
+		return config.PrinterConfig{}, fmt.Errorf("printer not configured: %s", printerID)
+	}
+	if !printer.Visible {
+		return config.PrinterConfig{}, fmt.Errorf("printer not visible: %s", printerID)
+	}
+	return printer, nil
+}
+
+func buildDuplexCardActionResponse(values map[string]interface{}, openID string, state duplexContinueCardState) (*callback.CardActionTriggerResponse, bool) {
+	token := cardStr(values, "token")
+	pending, ok := getManualDuplexPending(token)
+	if !ok {
+		return cardActionToast("warning", "手动双面任务已失效"), false
+	}
+	if pending.OpenID != "" && openID != "" && openID != pending.OpenID {
+		return cardActionToast("error", "这张打印卡片不属于你，请由发起人确认。"), false
+	}
+	shouldProcess := !pending.ActionInProgress
+	if pending.ActionInProgress {
+		state.Disabled = true
+		state.ContinueText = "处理中..."
+		state.CancelText = "处理中..."
+		state.StatusText = "⏳ 请求正在处理，请勿重复点击"
+	}
+	return &callback.CardActionTriggerResponse{
+		Toast: &callback.Toast{Type: "success", Content: "已收到请求"},
+		Card:  &callback.Card{Type: "raw", Data: buildDuplexContinueCardData(token, state)},
+	}, shouldProcess
+}
+
+func buildDisabledPrintConfigCardData(cfg *config.Config, session botCardSession, sessionID string, values map[string]interface{}, state printConfigCardState) (map[string]interface{}, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
+	totalPages := session.TotalPages
+	if totalPages <= 0 {
+		pages, err := countPDFPages(session.SourcePath)
+		if err != nil {
+			return nil, err
+		}
+		totalPages = pages
+	}
+
+	printerID := strings.TrimSpace(cardStr(values, "printer_id"))
+	if printerID == "" {
+		printerID = session.PrinterID
+	}
+	printer, err := resolveVisibleBotPrinter(cfg, printerID)
+	if err != nil {
+		return nil, err
+	}
+
+	defaults := botSessionDefaults(cfg, session)
+	if copies, err := strconv.Atoi(cardStr(values, "copies")); err == nil && copies > 0 {
+		defaults.Copies = copies
+	}
+	if nup, err := strconv.Atoi(cardStr(values, "nup")); err == nil && nup > 0 {
+		defaults.Nup = nup
+	}
+	if duplex := strings.TrimSpace(cardStr(values, "duplex")); duplex != "" {
+		defaults.Duplex = duplex
+	}
+	state.PagesValue = strings.TrimSpace(cardStr(values, "pages"))
+
+	return buildPrintConfigCardData(session.Filename, totalPages, printer, defaults, sessionID, state), nil
+}
+
+func handleBotCancel(cfg *config.Config, values map[string]interface{}, openID string) {
+	sessionID := cardStr(values, "session_id")
+	session, ok := claimBotSessionAction(sessionID)
+	if !ok {
+		log.Printf("[bot] cancel session already handled or not found: %s", sessionID)
+		return
+	}
+	if session.RequesterOpenID != "" && openID != "" && openID != session.RequesterOpenID {
+		releaseBotSessionAction(sessionID)
+		log.Printf("[bot] reject cancel action from non-requester session=%s requester=%s operator=%s",
+			sessionID, maskSensitive(session.RequesterOpenID), maskSensitive(openID))
+		_ = sendBotText(context.Background(), cfg, session.ChatID, session.ChatType, openID, "这张打印卡片不属于你，请由发起人确认。", "")
+		return
+	}
+	_ = os.Remove(session.SourcePath)
+	deleteBotSession(sessionID)
+	log.Printf("[bot] print config cancelled session=%s", sessionID)
 }
 
 func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID string) {
 	sessionID := cardStr(values, "session_id")
-	session, ok := getBotSession(sessionID)
+	session, ok := claimBotSessionAction(sessionID)
 	if !ok {
-		log.Printf("[bot] card session expired or not found: %s", sessionID)
+		log.Printf("[bot] card session expired, not found, or already processing: %s", sessionID)
 		return
 	}
 	if session.RequesterOpenID != "" && openID != "" && openID != session.RequesterOpenID {
+		releaseBotSessionAction(sessionID)
 		log.Printf("[bot] reject card action from non-requester session=%s requester=%s operator=%s",
 			sessionID, maskSensitive(session.RequesterOpenID), maskSensitive(openID))
 		_ = sendBotText(context.Background(), cfg, session.ChatID, session.ChatType, openID, "这张打印卡片不属于你，请由发起人确认。", "")
@@ -251,7 +513,10 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	idType := receiveIDType(session.ChatType)
 	replyMsgID := session.ReplyMessageID
 
-	printerID := cardStr(values, "printer_id")
+	printerID := strings.TrimSpace(cardStr(values, "printer_id"))
+	if printerID == "" {
+		printerID = session.PrinterID
+	}
 	copies, _ := strconv.Atoi(cardStr(values, "copies"))
 	if copies <= 0 {
 		copies = 1
@@ -268,34 +533,50 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 
 	// Validate inputs; re-send config card with error hint on invalid input
 	if printerID == "" {
+		releaseBotSessionAction(sessionID)
 		_ = sendSessionText(context.Background(), cfg, session, "请选择打印机")
 		return
 	}
 	if copies < 1 || copies > 99 {
+		releaseBotSessionAction(sessionID)
 		_ = sendSessionText(context.Background(), cfg, session, "份数必须为 1-99")
 		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
 		return
 	}
 	if !isValidPages(pagesStr) {
+		releaseBotSessionAction(sessionID)
 		_ = sendSessionText(context.Background(), cfg, session, "页码范围格式无效（如 1-5,7,9-12）")
 		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
 		return
 	}
 	if nup != 1 && !validNup(nup) {
+		releaseBotSessionAction(sessionID)
 		_ = sendSessionText(context.Background(), cfg, session, "无效的缩印选项（支持 1/2/4/6）")
 		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
 		return
 	}
 	if duplex != "off" && duplex != "auto" && duplex != "manual" {
+		releaseBotSessionAction(sessionID)
 		_ = sendSessionText(context.Background(), cfg, session, "无效的双面选项")
 		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
 		return
 	}
 
-	printerCfg, err := resolvePrinter(printerID)
+	printerCfg, err := resolveVisibleBotPrinter(cfg, printerID)
 	if err != nil {
 		log.Printf("[bot] resolve printer %s: %v", printerID, err)
-		_ = sendSessionText(context.Background(), cfg, session, "打印机配置错误")
+		releaseBotSessionAction(sessionID)
+		_ = sendSessionText(context.Background(), cfg, session, "请选择可用的打印机")
+		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
+		return
+	}
+	session.PrinterID = printerID
+	updateBotSessionPrinter(sessionID, printerID)
+
+	if !isPrinterDuplexOptionSupported(printerCfg, duplex) {
+		releaseBotSessionAction(sessionID)
+		_ = sendSessionText(context.Background(), cfg, session, "该打印机不支持所选双面模式")
+		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
 		return
 	}
 
@@ -304,10 +585,6 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	if session.CardID != "" {
 		if err := disableCardButtons(context.Background(), cfg, session.CardID); err != nil {
 			log.Printf("[bot] disable card buttons card=%s: %v", session.CardID, err)
-		}
-	} else if session.EphemeralMessageID != "" {
-		if err := deleteEphemeralCard(context.Background(), cfg, session.EphemeralMessageID); err != nil {
-			log.Printf("[bot] delete ephemeral card message=%s: %v", session.EphemeralMessageID, err)
 		}
 	} else {
 		log.Printf("[bot] cardID is empty, skip disableButtons session=%s", sessionID)
@@ -358,11 +635,6 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		duplexMode = "off"
 	}
 
-	if duplexMode != "off" && printerCfg.NormalizedDuplexMode() == "off" && duplex != "manual" {
-		_ = sendSessionText(context.Background(), cfg, session, "该打印机不支持双面打印")
-		return
-	}
-
 	finalPath, err := applyCopiesMode(printSourcePath, copies, true)
 	if err != nil {
 		log.Printf("[bot] copies: %v", err)
@@ -396,6 +668,17 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 			return
 		}
 
+		persistBotJobRecord(cfg, printJobRecord{
+			JobID:      jobID,
+			PrinterID:  printerID,
+			FileName:   session.Filename,
+			Status:     "pending_manual_continue",
+			Copies:     copies,
+			Duplex:     true,
+			DuplexHook: "bot://manual-duplex/" + token,
+			User:       feishuUserInfo{OpenID: openID},
+		})
+
 		duplexCard, err := buildDuplexContinueCard(token)
 		if err != nil {
 			log.Printf("[bot] build duplex card: %v", err)
@@ -403,7 +686,6 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 			_, _ = sendBotCard(context.Background(), cfg, chatID, session.ChatType, session.RequesterOpenID, duplexCard, replyMsgID)
 		}
 
-		persistBotJob(cfg, jobID, printerID, session.Filename, copies, true, openID)
 		_ = os.Remove(session.SourcePath)
 		deleteBotSession(sessionID)
 		return
@@ -458,13 +740,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 }
 
 func persistBotJob(cfg *config.Config, jobID, printerID, filename string, copies int, duplex bool, openID string) {
-	store, err := newBitableJobStore(cfg)
-	if err != nil {
-		log.Printf("[bot] bitable store init failed: %v", err)
-		return
-	}
-
-	record := printJobRecord{
+	persistBotJobRecord(cfg, printJobRecord{
 		JobID:     jobID,
 		PrinterID: printerID,
 		FileName:  filename,
@@ -472,21 +748,36 @@ func persistBotJob(cfg *config.Config, jobID, printerID, filename string, copies
 		Copies:    copies,
 		Duplex:    duplex,
 		User:      feishuUserInfo{OpenID: openID},
+	})
+}
+
+func persistBotJobRecord(cfg *config.Config, record printJobRecord) {
+	store, err := newBitableJobStore(cfg)
+	if err != nil {
+		log.Printf("[bot] bitable store init failed: %v", err)
+		return
 	}
 
 	if err := store.SaveJob(context.Background(), record); err != nil {
-		log.Printf("[bot] bitable persist failed: job_id=%s err=%v", jobID, err)
+		log.Printf("[bot] bitable persist failed: job_id=%s err=%v", record.JobID, err)
+		return
+	}
+
+	tracker := initJobStatusPoller(cfg)
+	if tracker != nil {
+		tracker.AddPendingJobWithStatus(record.JobID, record.PrinterID, record.Status)
 	}
 }
 
 func handleBotDuplexContinue(cfg *config.Config, values map[string]interface{}, openID string) {
 	token := cardStr(values, "token")
-	pending, ok := getManualDuplexPending(token)
+	pending, ok := claimManualDuplexPending(token)
 	if !ok {
-		log.Printf("[bot] duplex hook not found: %s", token)
+		log.Printf("[bot] duplex hook not found or already processing: %s", token)
 		return
 	}
 	if pending.OpenID != "" && openID != "" && openID != pending.OpenID {
+		releaseManualDuplexPending(token)
 		log.Printf("[bot] reject duplex continue from non-requester token=%s requester=%s operator=%s",
 			token, maskSensitive(pending.OpenID), maskSensitive(openID))
 		return
@@ -494,39 +785,72 @@ func handleBotDuplexContinue(cfg *config.Config, values map[string]interface{}, 
 
 	printerCfg, err := resolvePrinter(pending.PrinterID)
 	if err != nil {
+		releaseManualDuplexPending(token)
 		return
 	}
 
 	cupsClient, printerName, err := newCupsClientForPrinter(printerCfg)
 	if err != nil {
+		releaseManualDuplexPending(token)
 		return
 	}
 
 	jobID, err := cupsClient.SubmitJob(printerName, pending.RemainingFilePath, cups.PrintOptions{Copies: 1})
 	if err != nil {
 		log.Printf("[bot] duplex continue submit failed: %v", err)
+		releaseManualDuplexPending(token)
 		return
 	}
 
 	_ = os.Remove(pending.RemainingFilePath)
 	deleteManualDuplexPending(token)
 
-	persistBotJob(cfg, jobID, pending.PrinterID, "manual-duplex-continue", pending.Copies, true, openID)
+	if err := updateBotManualDuplexContinued(cfg, pending.JobID, jobID); err != nil {
+		log.Printf("[bot] bitable manual duplex continue update failed initial_job_id=%s continued_job_id=%s err=%v", pending.JobID, jobID, err)
+	}
+	if tracker := initJobStatusPoller(cfg); tracker != nil {
+		tracker.AddPendingJob(jobID, pending.PrinterID)
+	}
 	log.Printf("[bot] manual duplex continue: job_id=%s", jobID)
 }
 
 func handleBotDuplexCancel(cfg *config.Config, values map[string]interface{}, openID string) {
 	token := cardStr(values, "token")
-	pending, ok := getManualDuplexPending(token)
+	pending, ok := claimManualDuplexPending(token)
 	if !ok {
 		return
 	}
 	if pending.OpenID != "" && openID != "" && openID != pending.OpenID {
+		releaseManualDuplexPending(token)
 		log.Printf("[bot] reject duplex cancel from non-requester token=%s requester=%s operator=%s",
 			token, maskSensitive(pending.OpenID), maskSensitive(openID))
 		return
 	}
+	if pending.JobID != "" {
+		if err := updateBotJobStatus(cfg, pending.JobID, "cancelled"); err != nil {
+			log.Printf("[bot] bitable manual duplex cancel update failed job_id=%s err=%v", pending.JobID, err)
+		}
+		if tracker := initJobStatusPoller(cfg); tracker != nil {
+			tracker.RemovePendingJob(pending.JobID)
+		}
+	}
 	_ = os.Remove(pending.RemainingFilePath)
 	deleteManualDuplexPending(token)
 	log.Printf("[bot] manual duplex cancelled: token=%s", token)
+}
+
+func updateBotManualDuplexContinued(cfg *config.Config, initialJobID, continuedJobID string) error {
+	store, err := newBitableJobStore(cfg)
+	if err != nil {
+		return err
+	}
+	return store.UpdateManualDuplexContinued(context.Background(), initialJobID, continuedJobID)
+}
+
+func updateBotJobStatus(cfg *config.Config, jobID, status string) error {
+	store, err := newBitableJobStore(cfg)
+	if err != nil {
+		return err
+	}
+	return store.UpdateJobStatus(context.Background(), jobID, status)
 }

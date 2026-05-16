@@ -27,6 +27,7 @@ type manualDuplexPending struct {
 	CardID            string
 	CreatedAt         time.Time
 	ExpiresAt         time.Time
+	ActionInProgress  bool
 }
 
 const defaultManualDuplexHookTTL = 30 * time.Minute
@@ -78,6 +79,39 @@ func getManualDuplexPending(token string) (manualDuplexPending, bool) {
 	}
 
 	return item, ok
+}
+
+func claimManualDuplexPending(token string) (manualDuplexPending, bool) {
+	manualDuplexStore.Lock()
+	defer manualDuplexStore.Unlock()
+
+	item, ok := manualDuplexStore.items[token]
+	if !ok {
+		return manualDuplexPending{}, false
+	}
+	if time.Now().After(item.ExpiresAt) {
+		_ = os.Remove(item.RemainingFilePath)
+		delete(manualDuplexStore.items, token)
+		return manualDuplexPending{}, false
+	}
+	if item.ActionInProgress {
+		return manualDuplexPending{}, false
+	}
+	item.ActionInProgress = true
+	manualDuplexStore.items[token] = item
+	return item, true
+}
+
+func releaseManualDuplexPending(token string) {
+	manualDuplexStore.Lock()
+	defer manualDuplexStore.Unlock()
+
+	item, ok := manualDuplexStore.items[token]
+	if !ok {
+		return
+	}
+	item.ActionInProgress = false
+	manualDuplexStore.items[token] = item
 }
 
 func deleteManualDuplexPending(token string) {

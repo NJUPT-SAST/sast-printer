@@ -232,27 +232,41 @@ func disableCardButtons(ctx context.Context, cfg *config.Config, cardID string) 
 	if err != nil {
 		return fmt.Errorf("create client: %w", err)
 	}
-	for _, el := range []string{"print_btn", "cancel_btn"} {
-		var element string
-		if el == "print_btn" {
-			element = `{"tag":"button","element_id":"print_btn","text":{"tag":"plain_text","content":"处理中..."},"type":"primary_filled","disabled":true}`
-		} else {
-			element = `{"tag":"button","element_id":"cancel_btn","text":{"tag":"plain_text","content":"取消"},"type":"default","disabled":true}`
-		}
+	buttons := []struct {
+		id      string
+		element string
+	}{
+		{id: "select_printer_btn", element: `{"tag":"button","element_id":"select_printer_btn","text":{"tag":"plain_text","content":"处理中..."},"type":"primary_filled","disabled":true}`},
+		{id: "print_btn", element: `{"tag":"button","element_id":"print_btn","text":{"tag":"plain_text","content":"处理中..."},"type":"primary_filled","disabled":true}`},
+		{id: "cancel_btn", element: `{"tag":"button","element_id":"cancel_btn","text":{"tag":"plain_text","content":"取消"},"type":"default","disabled":true}`},
+	}
+	var firstErr error
+	updated := false
+	for _, button := range buttons {
 		req := larkcardkit.NewUpdateCardElementReqBuilder().
 			CardId(cardID).
-			ElementId(el).
+			ElementId(button.id).
 			Body(larkcardkit.NewUpdateCardElementReqBodyBuilder().
-				Element(element).
+				Element(button.element).
 				Build()).
 			Build()
 		resp, err := client.Cardkit.V1.CardElement.Update(ctx, req)
 		if err != nil {
-			return fmt.Errorf("update %s: %w", el, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("update %s: %w", button.id, err)
+			}
+			continue
 		}
 		if !resp.Success() {
-			return fmt.Errorf("update %s: code=%d msg=%s", el, resp.Code, resp.Msg)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("update %s: code=%d msg=%s", button.id, resp.Code, resp.Msg)
+			}
+			continue
 		}
+		updated = true
+	}
+	if !updated && firstErr != nil {
+		return firstErr
 	}
 	return nil
 }

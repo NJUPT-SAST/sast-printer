@@ -619,7 +619,7 @@ func SubmitPrintJob(c *gin.Context) {
 				// 将任务注册到后台轮询器
 				tracker := initJobStatusPoller(cfg)
 				if tracker != nil {
-					tracker.AddPendingJob(initialJobID, printerID)
+					tracker.AddPendingJobWithStatus(initialJobID, printerID, "pending_manual_continue")
 				}
 			}
 		}
@@ -814,14 +814,20 @@ func ContinueManualDuplexPrint(c *gin.Context) {
 		"message": "Remaining pages submitted successfully",
 	})
 
-	// 将第二遍任务也注册到后台轮询器
-	if _, ok := currentAuthUser(c); ok {
-		cfg, cfgErr := requireConfig()
-		if cfgErr == nil {
-			tracker := initJobStatusPoller(cfg)
-			if tracker != nil {
-				tracker.AddPendingJob(jobID, pending.PrinterID)
+	cfg, cfgErr := requireConfig()
+	if cfgErr == nil {
+		if store, storeErr := newBitableJobStore(cfg); storeErr == nil {
+			if err := store.UpdateManualDuplexContinued(context.Background(), pending.JobID, jobID); err != nil {
+				log.Printf("[manual-duplex] failed to update continued job in bitable initial_job_id=%s continued_job_id=%s err=%v", pending.JobID, jobID, err)
 			}
+		} else {
+			log.Printf("[manual-duplex] bitable store init failed while continuing initial_job_id=%s continued_job_id=%s err=%v", pending.JobID, jobID, storeErr)
+		}
+
+		// 将第二遍任务也注册到后台轮询器
+		tracker := initJobStatusPoller(cfg)
+		if tracker != nil {
+			tracker.AddPendingJob(jobID, pending.PrinterID)
 		}
 	}
 }
