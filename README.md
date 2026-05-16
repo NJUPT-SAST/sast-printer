@@ -13,6 +13,7 @@ GoPrint 是一个基于 Golang 的打印后端服务，通过 CUPS/IPP 与系统
 - 删除任务记录（仅删除任务存储中的记录）
 - 飞书文档/知识库导出并打印（支持 wiki 节点自动解析、快捷方式跟踪）
 - N-up 缩印打印（2-up / 4-up / 6-up），自动计算最优页面布局
+- 页面缩放打印（按百分比调整 PDF 页面尺寸）
 - 飞书 Bot 交互打印（消息卡片、文件接收、事件解密）
 - 状态细化返回（`status`、`reason`、`raw_state`）
 
@@ -188,7 +189,7 @@ bot:
 ```
 用户 @Bot 发送文件 / 链接
        ↓
-Bot 回复参数配置卡片（打印机、份数、页码范围、缩印、单双面）
+Bot 回复参数配置卡片（打印机、份数、页码范围、缩放、缩印、单双面）
        ↓
 用户修改参数 → 点击「开始打印」
        ↓
@@ -225,11 +226,13 @@ file_type_defaults:
     copies: 1
     duplex: auto
     nup: 1
+    scale: 100
     collate: true
   doc:
     copies: 1
     duplex: "off"
     nup: 2
+    scale: 100
     collate: true
   docx:
     $ref: doc     # 引用 doc 的配置
@@ -237,6 +240,7 @@ file_type_defaults:
     copies: 1
     duplex: "off"
     nup: 2
+    scale: 100
     collate: true
     direction: horizontal
 ```
@@ -263,12 +267,13 @@ curl -sS -X POST http://localhost:5001/api/jobs \
 - `copies=整数`：打印份数（默认 `1`）
 - `collate=true|false`：份数排列方式（默认 `true`）
 - `nup=1|2|4|6`：每版打印页数/缩印（默认 `1`，即不缩印）
+- `scale=10-400`：页面缩放比例，单位为百分比整数（默认 `100`）
 - `pages=页码范围`：指定打印页，如 `"1-5,10"`（默认全部）
 
-示例（双面 + 2-up 缩印）：
+示例（双面 + 2-up 缩印 + 90% 页面缩放）：
 
 ```bash
-curl -sS -X POST "http://localhost:5001/api/jobs?duplex=true&nup=2" \
+curl -sS -X POST "http://localhost:5001/api/jobs?duplex=true&nup=2&scale=90" \
     -F printer_id=sast-color-printer \
     -F file=@printer_test.pdf
 ```
@@ -360,6 +365,7 @@ curl -sS -X POST http://localhost:5001/api/jobs/feishu \
 - `duplex`：是否启用双面打印（默认 `false`）
 - `collate`：份数排列方式（默认 `true`）
 - `nup`：每版打印页数（`1`/`2`/`4`/`6`，默认 `1`）
+- `scale`：页面缩放比例，单位为百分比整数，范围 `10`-`400`（默认 `100`）
 - `pages`：页码范围（如 `"1-5,10"`）
 
 知识库文档打印示例：
@@ -470,12 +476,14 @@ file_type_defaults:
         copies: 1
         duplex: auto
         nup: 1
+        scale: 100
         collate: true
         direction: horizontal
     doc:
         copies: 1
         duplex: "off"
         nup: 2
+        scale: 100
         collate: true
     jpg:
         $ref: pdf
@@ -483,6 +491,7 @@ file_type_defaults:
         copies: 1
         duplex: "off"
         nup: 2
+        scale: 100
         collate: true
         direction: horizontal
 
@@ -566,6 +575,7 @@ printers:
 - `file_type_defaults.<ext>.copies`：默认打印份数
 - `file_type_defaults.<ext>.duplex`：双面模式（`off` / `auto` / `manual`）
 - `file_type_defaults.<ext>.nup`：每版打印页数（`1` / `2` / `4` / `6`）
+- `file_type_defaults.<ext>.scale`：页面缩放比例，单位为百分比整数（默认 `100`）
 - `file_type_defaults.<ext>.collate`：逐份打印（默认 `true`）
 - `file_type_defaults.<ext>.direction`：N-up 排版方向（`horizontal` / `vertical`）
 - `file_type_defaults.<ext>.$ref`：引用另一扩展名的配置（如 `jpg.$ref: pdf`）
@@ -583,4 +593,3 @@ printers:
 - `printers[].reverse_second_pass`：二轮页序反转（默认 `false`）
 - `printers[].rotate_second_pass`：二轮旋转 180 度（默认 `false`）
 - `printers[].note`：该打印机的说明文字
-

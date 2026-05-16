@@ -15,15 +15,15 @@ import (
 
 // Config 应用配置
 type Config struct {
-	Server           ServerConfig           `yaml:"server"`
-	Auth             AuthConfig             `yaml:"auth"`
-	SaneAPI          SaneAPIConfig          `yaml:"sane_api"`
-	JobStore         JobStoreConfig         `yaml:"job_store"`
-	Printing         PrintingConfig         `yaml:"printing"`
-	OfficeConversion OfficeConversionConfig `yaml:"office_conversion"`
-	Printers         []PrinterConfig              `yaml:"printers"`
-	Bot              BotConfig                    `yaml:"bot"`
-	FileTypeDefaults map[string]FileTypeDefault   `yaml:"file_type_defaults"`
+	Server           ServerConfig               `yaml:"server"`
+	Auth             AuthConfig                 `yaml:"auth"`
+	SaneAPI          SaneAPIConfig              `yaml:"sane_api"`
+	JobStore         JobStoreConfig             `yaml:"job_store"`
+	Printing         PrintingConfig             `yaml:"printing"`
+	OfficeConversion OfficeConversionConfig     `yaml:"office_conversion"`
+	Printers         []PrinterConfig            `yaml:"printers"`
+	Bot              BotConfig                  `yaml:"bot"`
+	FileTypeDefaults map[string]FileTypeDefault `yaml:"file_type_defaults"`
 }
 
 // ServerConfig 服务器配置
@@ -119,6 +119,7 @@ type FileTypeDefault struct {
 	Copies    int    `yaml:"copies"`
 	Duplex    string `yaml:"duplex"`
 	Nup       int    `yaml:"nup"`
+	Scale     int    `yaml:"scale"`
 	Collate   *bool  `yaml:"collate"`
 	Direction string `yaml:"direction"`
 }
@@ -506,6 +507,7 @@ func hardcodedDefault() FileTypeDefault {
 		Copies:    1,
 		Duplex:    "off",
 		Nup:       1,
+		Scale:     100,
 		Collate:   &v,
 		Direction: "horizontal",
 	}

@@ -436,6 +436,7 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 		Duplex    bool   `json:"duplex"`
 		Collate   *bool  `json:"collate"`
 		Nup       int    `json:"nup"`
+		Scale     int    `json:"scale"`
 		Pages     string `json:"pages"`
 	}
 
@@ -470,6 +471,15 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 	nup := reqBody.Nup
 	if nup <= 0 {
 		nup = 1
+	}
+
+	scalePercent := reqBody.Scale
+	if scalePercent <= 0 {
+		scalePercent = 100
+	}
+	if scalePercent < 10 || scalePercent > 400 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "scale must be an integer between 10 and 400"})
+		return
 	}
 
 	if err := acquirePrintSubmitQueue(c.Request.Context()); err != nil {
@@ -540,6 +550,23 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 		}
 	}
 	defer nupCleanup()
+
+	scaleCleanup := func() {}
+	if scalePercent != 100 {
+		scaledPath, cleanupScale, err := applyScalePercent(printSourcePath, scalePercent)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "failed to apply page scale",
+				"details": err.Error(),
+			})
+			return
+		}
+		if scaledPath != printSourcePath {
+			printSourcePath = scaledPath
+			scaleCleanup = cleanupScale
+		}
+	}
+	defer scaleCleanup()
 
 	printerCfg, err := resolvePrinter(printerID)
 	if err != nil {

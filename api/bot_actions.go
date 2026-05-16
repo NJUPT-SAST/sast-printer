@@ -467,10 +467,14 @@ func buildDisabledPrintConfigCardData(cfg *config.Config, session botCardSession
 	if nup, err := strconv.Atoi(cardStr(values, "nup")); err == nil && nup > 0 {
 		defaults.Nup = nup
 	}
+	if scale, err := strconv.Atoi(cardStr(values, "scale")); err == nil && scale > 0 {
+		defaults.Scale = scale
+	}
 	if duplex := strings.TrimSpace(cardStr(values, "duplex")); duplex != "" {
 		defaults.Duplex = duplex
 	}
 	state.PagesValue = strings.TrimSpace(cardStr(values, "pages"))
+	state.ScaleValue = strings.TrimSpace(cardStr(values, "scale"))
 
 	return buildPrintConfigCardData(session.Filename, totalPages, printer, defaults, sessionID, state), nil
 }
@@ -526,6 +530,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	if nup <= 0 {
 		nup = 1
 	}
+	scalePercent, scaleErr := parseScalePercent(cardStr(values, "scale"))
 	duplex := strings.TrimSpace(cardStr(values, "duplex"))
 	if duplex == "" {
 		duplex = "off"
@@ -552,6 +557,12 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	if nup != 1 && !validNup(nup) {
 		releaseBotSessionAction(sessionID)
 		_ = sendSessionText(context.Background(), cfg, session, "无效的缩印选项（支持 1/2/4/6）")
+		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
+		return
+	}
+	if scaleErr != nil {
+		releaseBotSessionAction(sessionID)
+		_ = sendSessionText(context.Background(), cfg, session, "缩放比例必须为 10-400 的整数百分比")
 		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
 		return
 	}
@@ -619,6 +630,21 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		}
 	}
 	defer nupCleanup()
+
+	scaleCleanup := func() {}
+	if scalePercent != 100 {
+		scaledPath, cleanupScale, err := applyScalePercent(printSourcePath, scalePercent)
+		if err != nil {
+			log.Printf("[bot] scale: %v", err)
+			_ = sendSessionText(context.Background(), cfg, session, "页面缩放处理失败")
+			return
+		}
+		if scaledPath != printSourcePath {
+			printSourcePath = scaledPath
+			scaleCleanup = cleanupScale
+		}
+	}
+	defer scaleCleanup()
 
 	cupsClient, printerName, err := newCupsClientForPrinter(printerCfg)
 	if err != nil {

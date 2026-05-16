@@ -506,6 +506,8 @@ paths:
         - 单面打印（duplex_mode=off）
         - 份数控制（copies 参数）
         - 排列方式（collate 参数）
+        - 页面缩放（scale 参数）
+        - N-up 缩印（nup 参数）
       operationId: submitPrintJob
       parameters:
         - name: copies
@@ -557,11 +559,24 @@ paths:
               - 纵向文档 → 横向输出排布
               - 横向文档 → 纵向输出排布
             - 4：每版打印 4 页。保持文档原始方向不变
+            - 6：每版打印 6 页
           schema:
             type: integer
-            enum: [1, 2, 4]
+            enum: [1, 2, 4, 6]
             default: 1
           example: 2
+        - name: scale
+          in: query
+          required: false
+          description: |
+            页面缩放比例，单位为百分比整数。默认 100 表示不缩放。
+            缩放会在页码筛选和 N-up 排版之后、份数展开和双面处理之前应用。
+          schema:
+            type: integer
+            default: 100
+            minimum: 10
+            maximum: 400
+          example: 90
       requestBody:
         required: true
         content:
@@ -810,7 +825,7 @@ paths:
         - 文档：`https://xxx.feishu.cn/docx/TOKEN`
         - 知识库页面：`https://xxx.feishu.cn/wiki/TOKEN`
 
-        导出完成后会经过与文件上传打印一致的后处理流程（页码范围、N-up 布局、份数、双面等），再提交到 CUPS。
+        导出完成后会经过与文件上传打印一致的后处理流程（页码范围、N-up 布局、页面缩放、份数、双面等），再提交到 CUPS。
 
         前提条件：
         - 飞书自建应用需拥有文档导出权限（`docs:doc:readonly`、`docx:document:readonly`、`drive:drive:readonly`）
@@ -1409,10 +1424,19 @@ components:
           example: true
         nup:
           type: integer
-          description: 每版打印页数（1/2/4）
-          enum: [1, 2, 4]
+          description: 每版打印页数（1/2/4/6）
+          enum: [1, 2, 4, 6]
           default: 1
           example: 1
+        scale:
+          type: integer
+          description: |
+            页面缩放比例，单位为百分比整数。默认 100 表示不缩放。
+            缩放会在页码筛选和 N-up 排版之后、份数展开和双面处理之前应用。
+          default: 100
+          minimum: 10
+          maximum: 400
+          example: 90
         pages:
           type: string
           description: |

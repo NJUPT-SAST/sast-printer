@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-pdf/fpdf"
 	pdfapi "github.com/pdfcpu/pdfcpu/pkg/api"
+	pdfmodel "github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
 
 type manualDuplexPending struct {
@@ -271,6 +272,30 @@ func getManualDuplexHookTTL() time.Duration {
 
 func countPDFPages(sourcePath string) (int, error) {
 	return pdfapi.PageCountFile(sourcePath)
+}
+
+func applyScalePercent(sourcePath string, scalePercent int) (string, func(), error) {
+	if scalePercent <= 0 {
+		scalePercent = 100
+	}
+	if scalePercent == 100 {
+		return sourcePath, func() {}, nil
+	}
+
+	tmpFile, err := os.CreateTemp(tempDir(), "goprint-scale-*.pdf")
+	if err != nil {
+		return "", nil, err
+	}
+	outPath := tmpFile.Name()
+	_ = tmpFile.Close()
+
+	resize := &pdfmodel.Resize{Scale: float64(scalePercent) / 100.0}
+	if err := pdfapi.ResizeFile(sourcePath, outPath, nil, resize, nil); err != nil {
+		_ = os.Remove(outPath)
+		return "", nil, fmt.Errorf("failed to scale pdf: %w", err)
+	}
+
+	return outPath, func() { _ = os.Remove(outPath) }, nil
 }
 
 func chooseAutoDuplexSides(sourcePath string) (string, error) {

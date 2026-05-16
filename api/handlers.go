@@ -68,6 +68,19 @@ func applyCopiesMode(sourcePath string, copies int, collate bool) (string, error
 	return ApplyUncollatedCopies(sourcePath, copies)
 }
 
+func parseScalePercent(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 100, nil
+	}
+
+	scale, err := strconv.Atoi(raw)
+	if err != nil || scale < 10 || scale > 400 {
+		return 0, fmt.Errorf("scale must be an integer between 10 and 400")
+	}
+	return scale, nil
+}
+
 func uploadWorkDir(cfg *config.Config, filename string) string {
 	if cfg != nil && (isOfficeConvertible(cfg, filename) || isImageConvertible(filename)) {
 		dir := strings.TrimSpace(cfg.OfficeConversion.OutputDir)
@@ -404,6 +417,12 @@ func SubmitPrintJob(c *gin.Context) {
 		nup = parsedNup
 	}
 
+	scalePercent, err := parseScalePercent(c.Query("scale"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	pages := strings.TrimSpace(c.Query("pages"))
 
 	file, err := c.FormFile("file")
@@ -495,6 +514,23 @@ func SubmitPrintJob(c *gin.Context) {
 		}
 	}
 	defer nupCleanup()
+
+	scaleCleanup := func() {}
+	if scalePercent != 100 {
+		scaledPath, cleanupScale, err := applyScalePercent(printSourcePath, scalePercent)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "failed to apply page scale",
+				"details": err.Error(),
+			})
+			return
+		}
+		if scaledPath != printSourcePath {
+			printSourcePath = scaledPath
+			scaleCleanup = cleanupScale
+		}
+	}
+	defer scaleCleanup()
 
 	printerCfg, err := resolvePrinter(printerID)
 	if err != nil {

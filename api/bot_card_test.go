@@ -47,6 +47,9 @@ func TestBuildPrinterSelectCardDataOnlyShowsPrinterPicker(t *testing.T) {
 	if element := findCardElementValue(card, "nup_select"); element != nil {
 		t.Fatal("printer selection card should not include n-up details")
 	}
+	if element := findCardElementValue(card, "scale_input"); element != nil {
+		t.Fatal("printer selection card should not include scale details")
+	}
 }
 
 func TestBuildPrintConfigCardDataFiltersDuplexByPrinter(t *testing.T) {
@@ -69,6 +72,22 @@ func TestBuildPrintConfigCardDataFiltersDuplexByPrinter(t *testing.T) {
 	}
 	if !hasOptionValue(options, "manual") {
 		t.Fatal("manual-only printer should show manual duplex option")
+	}
+}
+
+func TestBuildPrintConfigCardDataIncludesScaleInput(t *testing.T) {
+	card := buildPrintConfigCardData(
+		"report.pdf",
+		3,
+		config.PrinterConfig{ID: "sast-printer", Visible: true, DuplexMode: "off"},
+		config.FileTypeDefault{Copies: 1, Nup: 1, Scale: 90, Duplex: "off"},
+		"session-1",
+		printConfigCardState{},
+	)
+
+	scaleInput := findCardElement(t, card, "scale_input")
+	if value, ok := scaleInput["default_value"].(string); !ok || value != "90" {
+		t.Fatalf("scale default = %v, want 90", scaleInput["default_value"])
 	}
 }
 

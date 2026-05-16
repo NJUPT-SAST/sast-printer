@@ -29,6 +29,7 @@ type printConfigCardState struct {
 	PrintButtonText  string
 	CancelButtonText string
 	PagesValue       string
+	ScaleValue       string
 	StatusText       string
 }
 
@@ -238,6 +239,9 @@ func normalizeDefaultsForPrinter(defaults config.FileTypeDefault, printer config
 	if !validNup(defaults.Nup) {
 		defaults.Nup = 1
 	}
+	if defaults.Scale <= 0 {
+		defaults.Scale = 100
+	}
 	if !isPrinterDuplexOptionSupported(printer, defaults.Duplex) {
 		defaults.Duplex = "off"
 	}
@@ -251,6 +255,7 @@ func buildPrintConfigCardData(filename string, totalPages int, printer config.Pr
 	defaults = normalizeDefaultsForPrinter(defaults, printer)
 	copies := defaults.Copies
 	nup := defaults.Nup
+	scale := defaults.Scale
 	duplex := defaults.Duplex
 	if duplex == "" {
 		duplex = "off"
@@ -258,6 +263,10 @@ func buildPrintConfigCardData(filename string, totalPages int, printer config.Pr
 	pagesValue := fmt.Sprintf("1-%d", totalPages)
 	if strings.TrimSpace(state.PagesValue) != "" {
 		pagesValue = strings.TrimSpace(state.PagesValue)
+	}
+	scaleValue := fmt.Sprintf("%d", scale)
+	if strings.TrimSpace(state.ScaleValue) != "" {
+		scaleValue = strings.TrimSpace(state.ScaleValue)
 	}
 
 	cancelButtonText := state.CancelButtonText
@@ -335,6 +344,14 @@ func buildPrintConfigCardData(filename string, totalPages int, printer config.Pr
 					"name":          "pages",
 					"label":         map[string]interface{}{"tag": "plain_text", "content": "页码范围"},
 					"default_value": pagesValue,
+					"width":         "fill",
+				},
+				map[string]interface{}{
+					"tag":           "input",
+					"element_id":    "scale_input",
+					"name":          "scale",
+					"label":         map[string]interface{}{"tag": "plain_text", "content": "缩放比例（%）"},
+					"default_value": scaleValue,
 					"width":         "fill",
 				},
 				map[string]interface{}{
