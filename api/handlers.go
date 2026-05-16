@@ -512,8 +512,14 @@ func SubmitPrintJob(c *gin.Context) {
 	if !duplexRequested {
 		duplexMode = "off"
 	}
-	if pageCount, countErr := countPDFPages(printSourcePath); countErr == nil && pageCount == 1 {
-		duplexMode = "off"
+	printPageCount := 0
+	if pageCount, countErr := countPDFPages(printSourcePath); countErr == nil {
+		printPageCount = pageCount
+		if pageCount == 1 {
+			duplexMode = "off"
+		}
+	} else {
+		log.Printf("[print] failed to count pages path=%s err=%v", printSourcePath, countErr)
 	}
 
 	if duplexRequested && printerCfg.NormalizedDuplexMode() == "off" {
@@ -611,6 +617,7 @@ func SubmitPrintJob(c *gin.Context) {
 					FileName:   file.Filename,
 					Status:     "pending_manual_continue",
 					Copies:     copies,
+					PageCount:  printPageCount,
 					Duplex:     true,
 					DuplexHook: hookURL,
 					User:       user,
@@ -695,6 +702,7 @@ func SubmitPrintJob(c *gin.Context) {
 				FileName:  file.Filename,
 				Status:    "pending",
 				Copies:    copies,
+				PageCount: printPageCount,
 				Duplex:    duplexMode != "off",
 				User:      user,
 			})

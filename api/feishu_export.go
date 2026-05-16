@@ -557,8 +557,14 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 	if !reqBody.Duplex {
 		duplexMode = "off"
 	}
-	if pageCount, countErr := countPDFPages(printSourcePath); countErr == nil && pageCount == 1 {
-		duplexMode = "off"
+	printPageCount := 0
+	if pageCount, countErr := countPDFPages(printSourcePath); countErr == nil {
+		printPageCount = pageCount
+		if pageCount == 1 {
+			duplexMode = "off"
+		}
+	} else {
+		log.Printf("[feishu-print] failed to count pages path=%s err=%v", printSourcePath, countErr)
 	}
 
 	if reqBody.Duplex && printerCfg.NormalizedDuplexMode() == "off" {
@@ -649,6 +655,7 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 				FileName:   filename,
 				Status:     "pending_manual_continue",
 				Copies:     copies,
+				PageCount:  printPageCount,
 				Duplex:     true,
 				DuplexHook: hookURL,
 				User:       user,
@@ -734,6 +741,7 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 			FileName:  filename,
 			Status:    "pending",
 			Copies:    copies,
+			PageCount: printPageCount,
 			Duplex:    duplexMode != "off",
 			User:      user,
 		})

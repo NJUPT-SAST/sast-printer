@@ -631,8 +631,14 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	if duplex != "off" {
 		duplexMode = duplex
 	}
-	if pageCount, countErr := countPDFPages(printSourcePath); countErr == nil && pageCount == 1 {
-		duplexMode = "off"
+	printPageCount := 0
+	if pageCount, countErr := countPDFPages(printSourcePath); countErr == nil {
+		printPageCount = pageCount
+		if pageCount == 1 {
+			duplexMode = "off"
+		}
+	} else {
+		log.Printf("[bot] failed to count pages path=%s err=%v", printSourcePath, countErr)
 	}
 
 	finalPath, err := applyCopiesMode(printSourcePath, copies, true)
@@ -674,6 +680,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 			FileName:   session.Filename,
 			Status:     "pending_manual_continue",
 			Copies:     copies,
+			PageCount:  printPageCount,
 			Duplex:     true,
 			DuplexHook: "bot://manual-duplex/" + token,
 			User:       feishuUserInfo{OpenID: openID},
@@ -722,7 +729,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		return
 	}
 
-	persistBotJob(cfg, jobID, printerID, session.Filename, copies, duplexMode != "off", openID)
+	persistBotJob(cfg, jobID, printerID, session.Filename, copies, printPageCount, duplexMode != "off", openID)
 	_ = os.Remove(session.SourcePath)
 	deleteBotSession(sessionID)
 	log.Printf("[bot] print job submitted: job_id=%s printer=%s duplex=%s", jobID, printerID, duplexMode)
@@ -739,13 +746,14 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	}
 }
 
-func persistBotJob(cfg *config.Config, jobID, printerID, filename string, copies int, duplex bool, openID string) {
+func persistBotJob(cfg *config.Config, jobID, printerID, filename string, copies int, pageCount int, duplex bool, openID string) {
 	persistBotJobRecord(cfg, printJobRecord{
 		JobID:     jobID,
 		PrinterID: printerID,
 		FileName:  filename,
 		Status:    "pending",
 		Copies:    copies,
+		PageCount: pageCount,
 		Duplex:    duplex,
 		User:      feishuUserInfo{OpenID: openID},
 	})

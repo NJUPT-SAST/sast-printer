@@ -19,6 +19,7 @@ const (
 	bitableFieldFileName    = "file_name"
 	bitableFieldStatus      = "status"
 	bitableFieldCopies      = "copies"
+	bitableFieldPageCount   = "page_count"
 	bitableFieldDuplex      = "duplex"
 	bitableFieldDuplexHook  = "duplex_hook"
 	bitableFieldUser        = "user"
@@ -38,6 +39,7 @@ type printJobRecord struct {
 	FileName   string
 	Status     string
 	Copies     int
+	PageCount  int
 	Duplex     bool
 	DuplexHook string
 	User       feishuUserInfo
@@ -90,6 +92,10 @@ func (s *bitableJobStore) SaveJob(ctx context.Context, record printJobRecord) er
 		bitableFieldStatus:    record.Status,
 		bitableFieldCopies:    record.Copies,
 		bitableFieldDuplex:    record.Duplex,
+	}
+
+	if record.PageCount > 0 {
+		fields[bitableFieldPageCount] = record.PageCount
 	}
 
 	if v := strings.TrimSpace(record.DuplexHook); v != "" {
@@ -269,6 +275,7 @@ func mapRecordToJob(record *larkbitable.AppTableRecord) map[string]interface{} {
 		"file_name":    fieldAsString(fields[bitableFieldFileName]),
 		"status":       fieldAsString(fields[bitableFieldStatus]),
 		"copies":       fieldAsInt(fields[bitableFieldCopies]),
+		"page_count":   fieldAsInt(fields[bitableFieldPageCount]),
 		"duplex":       fieldAsBool(fields[bitableFieldDuplex]),
 		"submitted_at": submittedAt,
 		"duplex_hook":  duplexHook,
