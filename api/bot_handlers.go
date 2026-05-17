@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"goprint/config"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -21,7 +22,11 @@ func initBotDispatcher() {
 		return
 	}
 	startBotSessionCleaner()
-	botDispatcher = dispatcher.NewEventDispatcher("", cfg.Bot.EncryptKey).
+	botDispatcher = newBotEventDispatcher(cfg)
+}
+
+func newBotEventDispatcher(cfg *config.Config) *dispatcher.EventDispatcher {
+	return dispatcher.NewEventDispatcher(cfg.Bot.VerificationToken, cfg.Bot.EncryptKey).
 		OnP2MessageReceiveV1(func(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
 			go processMessageEvent(getConfig(), event)
 			return nil
