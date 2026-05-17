@@ -58,6 +58,12 @@ func optionInitialIndex(options []map[string]interface{}, selected string) int {
 	return 1
 }
 
+func botCardConfig() map[string]interface{} {
+	return map[string]interface{}{
+		"update_multi": true,
+	}
+}
+
 func buildPrinterSelectCardData(filename string, totalPages int, printers []printerOption, sessionID string, state printerSelectCardState) map[string]interface{} {
 	mkOptText := func(s string) map[string]interface{} {
 		return map[string]interface{}{"tag": "plain_text", "content": s}
@@ -173,6 +179,7 @@ func buildPrinterSelectCardData(filename string, totalPages int, printers []prin
 
 	return map[string]interface{}{
 		"schema": "2.0",
+		"config": botCardConfig(),
 		"header": map[string]interface{}{
 			"template": "blue",
 			"title": map[string]interface{}{
@@ -412,6 +419,7 @@ func buildPrintConfigCardData(filename string, totalPages int, printer config.Pr
 
 	return map[string]interface{}{
 		"schema": "2.0",
+		"config": botCardConfig(),
 		"header": map[string]interface{}{
 			"template": "blue",
 			"title": map[string]interface{}{
@@ -495,6 +503,7 @@ func isValidPages(s string) bool {
 func buildJobSubmittedCard(jobID, printerID, filename string, copies int, duplex string) (string, error) {
 	card := map[string]interface{}{
 		"schema": "2.0",
+		"config": botCardConfig(),
 		"header": map[string]interface{}{
 			"template": "green",
 			"title": map[string]interface{}{
@@ -597,6 +606,7 @@ func buildDuplexContinueCardData(token string, state duplexContinueCardState) ma
 
 	return map[string]interface{}{
 		"schema": "2.0",
+		"config": botCardConfig(),
 		"header": map[string]interface{}{
 			"template": "orange",
 			"title": map[string]interface{}{

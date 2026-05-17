@@ -273,14 +273,14 @@ func disableCardButtons(ctx context.Context, cfg *config.Config, cardID string) 
 
 func sendTextMsg(ctx context.Context, cfg *config.Config, chatID, receiveIDType, text, messageID string) error {
 	escaped, _ := json.Marshal(text)
-	card := fmt.Sprintf(`{"schema":"2.0","body":{"elements":[{"tag":"markdown","element_id":"msg","content":%s}]}}`, escaped)
+	card := fmt.Sprintf(`{"schema":"2.0","config":{"update_multi":true},"body":{"elements":[{"tag":"markdown","element_id":"msg","content":%s}]}}`, escaped)
 	_, err := sendCard(ctx, cfg, chatID, receiveIDType, card, messageID)
 	return err
 }
 
 func sendBotText(ctx context.Context, cfg *config.Config, chatID, chatType, visibleOpenID, text, messageID string) error {
 	escaped, _ := json.Marshal(text)
-	card := fmt.Sprintf(`{"schema":"2.0","body":{"elements":[{"tag":"markdown","element_id":"msg","content":%s}]}}`, escaped)
+	card := fmt.Sprintf(`{"schema":"2.0","config":{"update_multi":true},"body":{"elements":[{"tag":"markdown","element_id":"msg","content":%s}]}}`, escaped)
 	_, err := sendBotCard(ctx, cfg, chatID, chatType, visibleOpenID, card, messageID)
 	return err
 }

@@ -28,6 +28,8 @@ func TestBuildPrintConfigCardDataDisablesActionButtons(t *testing.T) {
 	if disabled, ok := cancelButton["disabled"].(bool); !ok || !disabled {
 		t.Fatalf("cancel button disabled = %v, want true", cancelButton["disabled"])
 	}
+
+	assertCardUpdateMulti(t, card)
 }
 
 func TestBuildPrinterSelectCardDataOnlyShowsPrinterPicker(t *testing.T) {
@@ -41,6 +43,7 @@ func TestBuildPrinterSelectCardDataOnlyShowsPrinterPicker(t *testing.T) {
 
 	_ = findCardElement(t, card, "printer_select")
 	_ = findCardElement(t, card, "select_printer_btn")
+	assertCardUpdateMulti(t, card)
 	if element := findCardElementValue(card, "duplex_select"); element != nil {
 		t.Fatal("printer selection card should not include duplex details")
 	}
@@ -63,6 +66,7 @@ func TestBuildPrintConfigCardDataFiltersDuplexByPrinter(t *testing.T) {
 	)
 
 	duplexSelect := findCardElement(t, card, "duplex_select")
+	assertCardUpdateMulti(t, card)
 	options, ok := duplexSelect["options"].([]map[string]interface{})
 	if !ok {
 		t.Fatalf("duplex options type = %T, want []map[string]interface{}", duplexSelect["options"])
@@ -94,6 +98,7 @@ func TestBuildPrintConfigCardDataIncludesScaleInput(t *testing.T) {
 func TestBuildDuplexContinueCardDataDisablesActionButtons(t *testing.T) {
 	card := buildDuplexContinueCardData("token-1", duplexContinueCardState{Disabled: true})
 
+	assertCardUpdateMulti(t, card)
 	continueButton := findCardElement(t, card, "continue_duplex_btn")
 	if disabled, ok := continueButton["disabled"].(bool); !ok || !disabled {
 		t.Fatalf("continue button disabled = %v, want true", continueButton["disabled"])
@@ -105,6 +110,17 @@ func TestBuildDuplexContinueCardDataDisablesActionButtons(t *testing.T) {
 	cancelButton := findCardElement(t, card, "cancel_duplex_btn")
 	if disabled, ok := cancelButton["disabled"].(bool); !ok || !disabled {
 		t.Fatalf("cancel button disabled = %v, want true", cancelButton["disabled"])
+	}
+}
+
+func assertCardUpdateMulti(t *testing.T, card map[string]interface{}) {
+	t.Helper()
+	config, ok := card["config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("card config type = %T, want map[string]interface{}", card["config"])
+	}
+	if updateMulti, ok := config["update_multi"].(bool); !ok || !updateMulti {
+		t.Fatalf("card config.update_multi = %v, want true", config["update_multi"])
 	}
 }
 
