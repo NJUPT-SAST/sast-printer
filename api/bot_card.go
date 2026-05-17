@@ -49,13 +49,19 @@ func buildPrinterOptions(cfg *config.Config) []printerOption {
 	return opts
 }
 
-func optionInitialIndex(options []map[string]interface{}, selected string) int {
-	for i, opt := range options {
+func optionInitialValue(options []map[string]interface{}, selected string) string {
+	for _, opt := range options {
 		if value, ok := opt["value"].(string); ok && value == selected {
-			return i + 1
+			return value
 		}
 	}
-	return 1
+	if len(options) == 0 {
+		return ""
+	}
+	if value, ok := options[0]["value"].(string); ok {
+		return value
+	}
+	return ""
 }
 
 func botCardConfig() map[string]interface{} {
@@ -80,7 +86,7 @@ func buildPrinterSelectCardData(filename string, totalPages int, printers []prin
 	if selectedPrinterID == "" && len(printers) > 0 {
 		selectedPrinterID = printers[0].ID
 	}
-	printerInitialIndex := optionInitialIndex(printerOpts, selectedPrinterID)
+	printerInitialOption := optionInitialValue(printerOpts, selectedPrinterID)
 
 	cancelButtonText := state.CancelButtonText
 	if cancelButtonText == "" {
@@ -107,7 +113,9 @@ func buildPrinterSelectCardData(filename string, totalPages int, printers []prin
 	}
 	if state.Disabled {
 		cancelButton["disabled"] = true
+		cancelButton["form_action_type"] = "submit"
 		nextButton["disabled"] = true
+		nextButton["form_action_type"] = "submit"
 	} else {
 		cancelButton["form_action_type"] = "submit"
 		cancelButton["behaviors"] = []interface{}{
@@ -131,13 +139,13 @@ func buildPrinterSelectCardData(filename string, totalPages int, printers []prin
 			"name":       "printer_form",
 			"elements": []interface{}{
 				map[string]interface{}{
-					"tag":           "select_static",
-					"element_id":    "printer_select",
-					"name":          "printer_id",
-					"placeholder":   map[string]interface{}{"tag": "plain_text", "content": "选择打印机"},
-					"options":       printerOpts,
-					"initial_index": printerInitialIndex,
-					"width":         "fill",
+					"tag":            "select_static",
+					"element_id":     "printer_select",
+					"name":           "printer_id",
+					"placeholder":    map[string]interface{}{"tag": "plain_text", "content": "选择打印机"},
+					"options":        printerOpts,
+					"initial_option": printerInitialOption,
+					"width":          "fill",
 				},
 				map[string]interface{}{
 					"tag":                "column_set",
@@ -301,7 +309,9 @@ func buildPrintConfigCardData(filename string, totalPages int, printer config.Pr
 	}
 	if state.Disabled {
 		cancelButton["disabled"] = true
+		cancelButton["form_action_type"] = "submit"
 		printButton["disabled"] = true
+		printButton["form_action_type"] = "submit"
 	} else {
 		cancelButton["form_action_type"] = "submit"
 		cancelButton["behaviors"] = []interface{}{
@@ -362,22 +372,22 @@ func buildPrintConfigCardData(filename string, totalPages int, printer config.Pr
 					"width":         "fill",
 				},
 				map[string]interface{}{
-					"tag":           "select_static",
-					"element_id":    "nup_select",
-					"name":          "nup",
-					"placeholder":   map[string]interface{}{"tag": "plain_text", "content": "缩印"},
-					"options":       nupOptions,
-					"initial_index": optionInitialIndex(nupOptions, strconv.Itoa(nup)),
-					"width":         "fill",
+					"tag":            "select_static",
+					"element_id":     "nup_select",
+					"name":           "nup",
+					"placeholder":    map[string]interface{}{"tag": "plain_text", "content": "缩印"},
+					"options":        nupOptions,
+					"initial_option": optionInitialValue(nupOptions, strconv.Itoa(nup)),
+					"width":          "fill",
 				},
 				map[string]interface{}{
-					"tag":           "select_static",
-					"element_id":    "duplex_select",
-					"name":          "duplex",
-					"placeholder":   map[string]interface{}{"tag": "plain_text", "content": "单双面"},
-					"options":       duplexOptions,
-					"initial_index": optionInitialIndex(duplexOptions, duplex),
-					"width":         "fill",
+					"tag":            "select_static",
+					"element_id":     "duplex_select",
+					"name":           "duplex",
+					"placeholder":    map[string]interface{}{"tag": "plain_text", "content": "单双面"},
+					"options":        duplexOptions,
+					"initial_option": optionInitialValue(duplexOptions, duplex),
+					"width":          "fill",
 				},
 				map[string]interface{}{
 					"tag":                "column_set",
@@ -514,14 +524,15 @@ func buildJobSubmittedCard(jobID, printerID, filename string, copies int, duplex
 		"body": map[string]interface{}{
 			"elements": []interface{}{
 				map[string]interface{}{
-					"tag":        "div",
+					"tag":        "markdown",
 					"element_id": "job_info",
-					"fields": []interface{}{
-						map[string]interface{}{"is_short": true, "text": map[string]interface{}{"tag": "lark_md", "content": "**文件**\n" + filename}},
-						map[string]interface{}{"is_short": true, "text": map[string]interface{}{"tag": "lark_md", "content": "**打印机**\n" + printerID}},
-						map[string]interface{}{"is_short": true, "text": map[string]interface{}{"tag": "lark_md", "content": "**份数**\n" + strconv.Itoa(copies)}},
-						map[string]interface{}{"is_short": true, "text": map[string]interface{}{"tag": "lark_md", "content": "**模式**\n" + duplex}},
-					},
+					"content": fmt.Sprintf(
+						"**文件**：%s\n**打印机**：%s\n**份数**：%d\n**模式**：%s",
+						filename,
+						printerID,
+						copies,
+						duplex,
+					),
 				},
 				map[string]interface{}{"tag": "hr", "element_id": "divider"},
 				map[string]interface{}{

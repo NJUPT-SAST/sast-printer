@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"testing"
 
 	"goprint/config"
@@ -44,6 +45,7 @@ func TestBuildPrinterSelectCardDataOnlyShowsPrinterPicker(t *testing.T) {
 	_ = findCardElement(t, card, "printer_select")
 	_ = findCardElement(t, card, "select_printer_btn")
 	assertCardUpdateMulti(t, card)
+	assertSelectInitialOption(t, card, "printer_select", "printer-a")
 	if element := findCardElementValue(card, "duplex_select"); element != nil {
 		t.Fatal("printer selection card should not include duplex details")
 	}
@@ -67,6 +69,8 @@ func TestBuildPrintConfigCardDataFiltersDuplexByPrinter(t *testing.T) {
 
 	duplexSelect := findCardElement(t, card, "duplex_select")
 	assertCardUpdateMulti(t, card)
+	assertSelectInitialOption(t, card, "nup_select", "1")
+	assertSelectInitialOption(t, card, "duplex_select", "off")
 	options, ok := duplexSelect["options"].([]map[string]interface{})
 	if !ok {
 		t.Fatalf("duplex options type = %T, want []map[string]interface{}", duplexSelect["options"])
@@ -113,6 +117,43 @@ func TestBuildDuplexContinueCardDataDisablesActionButtons(t *testing.T) {
 	}
 }
 
+func TestBuildJobSubmittedCardUsesJSON2BodyElements(t *testing.T) {
+	cardJSON, err := buildJobSubmittedCard("job-1", "printer-a", "report.pdf", 2, "单面")
+	if err != nil {
+		t.Fatalf("build submitted card: %v", err)
+	}
+	var card map[string]interface{}
+	if err := json.Unmarshal([]byte(cardJSON), &card); err != nil {
+		t.Fatalf("parse submitted card: %v", err)
+	}
+
+	assertCardUpdateMulti(t, card)
+	jobInfo := findCardElement(t, card, "job_info")
+	if jobInfo["tag"] != "markdown" {
+		t.Fatalf("job_info tag = %v, want markdown", jobInfo["tag"])
+	}
+	if _, ok := jobInfo["fields"]; ok {
+		t.Fatal("JSON 2.0 submitted card should not use legacy div.fields")
+	}
+}
+
+func TestDisabledButtonPatchOnlyPatchesMutableFields(t *testing.T) {
+	patch, err := disabledButtonPatch("处理中...")
+	if err != nil {
+		t.Fatalf("disabled button patch: %v", err)
+	}
+	var partial map[string]interface{}
+	if err := json.Unmarshal([]byte(patch), &partial); err != nil {
+		t.Fatalf("parse disabled button patch: %v", err)
+	}
+	if disabled, ok := partial["disabled"].(bool); !ok || !disabled {
+		t.Fatalf("disabled = %v, want true", partial["disabled"])
+	}
+	if _, ok := partial["tag"]; ok {
+		t.Fatal("patch should not replace the whole button component")
+	}
+}
+
 func assertCardUpdateMulti(t *testing.T, card map[string]interface{}) {
 	t.Helper()
 	config, ok := card["config"].(map[string]interface{})
@@ -121,6 +162,17 @@ func assertCardUpdateMulti(t *testing.T, card map[string]interface{}) {
 	}
 	if updateMulti, ok := config["update_multi"].(bool); !ok || !updateMulti {
 		t.Fatalf("card config.update_multi = %v, want true", config["update_multi"])
+	}
+}
+
+func assertSelectInitialOption(t *testing.T, card map[string]interface{}, elementID, want string) {
+	t.Helper()
+	selectElement := findCardElement(t, card, elementID)
+	if got, ok := selectElement["initial_option"].(string); !ok || got != want {
+		t.Fatalf("%s initial_option = %v, want %s", elementID, selectElement["initial_option"], want)
+	}
+	if _, ok := selectElement["initial_index"]; ok {
+		t.Fatalf("%s should not use legacy initial_index", elementID)
 	}
 }
 

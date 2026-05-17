@@ -234,32 +234,39 @@ func disableCardButtons(ctx context.Context, cfg *config.Config, cardID string) 
 	}
 	buttons := []struct {
 		id      string
-		element string
+		content string
 	}{
-		{id: "select_printer_btn", element: `{"tag":"button","element_id":"select_printer_btn","text":{"tag":"plain_text","content":"处理中..."},"type":"primary_filled","disabled":true}`},
-		{id: "print_btn", element: `{"tag":"button","element_id":"print_btn","text":{"tag":"plain_text","content":"处理中..."},"type":"primary_filled","disabled":true}`},
-		{id: "cancel_btn", element: `{"tag":"button","element_id":"cancel_btn","text":{"tag":"plain_text","content":"取消"},"type":"default","disabled":true}`},
+		{id: "select_printer_btn", content: "处理中..."},
+		{id: "print_btn", content: "处理中..."},
+		{id: "cancel_btn", content: "取消"},
 	}
 	var firstErr error
 	updated := false
 	for _, button := range buttons {
-		req := larkcardkit.NewUpdateCardElementReqBuilder().
-			CardId(cardID).
-			ElementId(button.id).
-			Body(larkcardkit.NewUpdateCardElementReqBodyBuilder().
-				Element(button.element).
-				Build()).
-			Build()
-		resp, err := client.Cardkit.V1.CardElement.Update(ctx, req)
+		partial, err := disabledButtonPatch(button.content)
 		if err != nil {
 			if firstErr == nil {
-				firstErr = fmt.Errorf("update %s: %w", button.id, err)
+				firstErr = fmt.Errorf("build patch %s: %w", button.id, err)
+			}
+			continue
+		}
+		req := larkcardkit.NewPatchCardElementReqBuilder().
+			CardId(cardID).
+			ElementId(button.id).
+			Body(larkcardkit.NewPatchCardElementReqBodyBuilder().
+				PartialElement(partial).
+				Build()).
+			Build()
+		resp, err := client.Cardkit.V1.CardElement.Patch(ctx, req)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("patch %s: %w", button.id, err)
 			}
 			continue
 		}
 		if !resp.Success() {
 			if firstErr == nil {
-				firstErr = fmt.Errorf("update %s: code=%d msg=%s", button.id, resp.Code, resp.Msg)
+				firstErr = fmt.Errorf("patch %s: code=%d msg=%s", button.id, resp.Code, resp.Msg)
 			}
 			continue
 		}
@@ -269,6 +276,21 @@ func disableCardButtons(ctx context.Context, cfg *config.Config, cardID string) 
 		return firstErr
 	}
 	return nil
+}
+
+func disabledButtonPatch(content string) (string, error) {
+	partial := map[string]interface{}{
+		"disabled": true,
+		"text": map[string]interface{}{
+			"tag":     "plain_text",
+			"content": content,
+		},
+	}
+	b, err := json.Marshal(partial)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 func sendTextMsg(ctx context.Context, cfg *config.Config, chatID, receiveIDType, text, messageID string) error {
