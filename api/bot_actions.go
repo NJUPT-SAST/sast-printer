@@ -653,19 +653,13 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		return
 	}
 
-	duplexMode := printerCfg.NormalizedDuplexMode()
-	if duplex != "off" {
-		duplexMode = duplex
-	}
 	printPageCount := 0
 	if pageCount, countErr := countPDFPages(printSourcePath); countErr == nil {
 		printPageCount = pageCount
-		if pageCount == 1 {
-			duplexMode = "off"
-		}
 	} else {
 		log.Printf("[bot] failed to count pages path=%s err=%v", printSourcePath, countErr)
 	}
+	duplexMode := botSelectedDuplexMode(duplex, printPageCount)
 
 	finalPath, err := applyCopiesMode(printSourcePath, copies, true)
 	if err != nil {
@@ -770,6 +764,17 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	} else {
 		_, _ = sendBotCard(context.Background(), cfg, chatID, session.ChatType, session.RequesterOpenID, card, replyMsgID)
 	}
+}
+
+func botSelectedDuplexMode(selectedDuplex string, pageCount int) string {
+	selectedDuplex = strings.TrimSpace(selectedDuplex)
+	if selectedDuplex == "" {
+		selectedDuplex = "off"
+	}
+	if pageCount == 1 {
+		return "off"
+	}
+	return selectedDuplex
 }
 
 func persistBotJob(cfg *config.Config, jobID, printerID, filename string, copies int, pageCount int, duplex bool, openID string) {
