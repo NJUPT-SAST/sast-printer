@@ -84,6 +84,10 @@ func convertImageToPDF(cfg *config.Config, sourcePath string) (string, error) {
 	if imgCfg.Width <= 0 || imgCfg.Height <= 0 {
 		return "", fmt.Errorf("invalid image dimensions")
 	}
+	pixels := int64(imgCfg.Width) * int64(imgCfg.Height)
+	if cfg.Printing.MaxImagePixels > 0 && pixels > int64(cfg.Printing.MaxImagePixels) {
+		return "", fmt.Errorf("image has %d pixels, exceeding configured limit of %d", pixels, cfg.Printing.MaxImagePixels)
+	}
 
 	orientation := "P"
 	pageW := 210.0

@@ -274,6 +274,27 @@ func countPDFPages(sourcePath string) (int, error) {
 	return pdfapi.PageCountFile(sourcePath)
 }
 
+func validatePDFPageLimit(cfg *config.Config, pages int) error {
+	if pages <= 0 {
+		return fmt.Errorf("invalid pdf page count: %d", pages)
+	}
+	if cfg != nil && cfg.Printing.MaxPDFPages > 0 && pages > cfg.Printing.MaxPDFPages {
+		return fmt.Errorf("pdf has %d pages, exceeding configured limit of %d", pages, cfg.Printing.MaxPDFPages)
+	}
+	return nil
+}
+
+func enforcePDFPageLimit(cfg *config.Config, sourcePath string) (int, error) {
+	pages, err := countPDFPages(sourcePath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read pdf page count: %w", err)
+	}
+	if err := validatePDFPageLimit(cfg, pages); err != nil {
+		return 0, err
+	}
+	return pages, nil
+}
+
 func applyScalePercent(sourcePath string, scalePercent int) (string, func(), error) {
 	if scalePercent <= 0 {
 		scalePercent = 100

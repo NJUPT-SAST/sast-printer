@@ -74,6 +74,11 @@ type FeishuBitableConfig struct {
 // PrintingConfig 打印相关全局配置
 type PrintingConfig struct {
 	IPPUsername         string `yaml:"ipp_username"`
+	QueueWaitTimeout    string `yaml:"queue_wait_timeout"`
+	MaxUploadBytes      int64  `yaml:"max_upload_bytes"`
+	MaxCopies           int    `yaml:"max_copies"`
+	MaxPDFPages         int    `yaml:"max_pdf_pages"`
+	MaxImagePixels      int    `yaml:"max_image_pixels"`
 	ManualDuplexHookTTL string `yaml:"manual_duplex_hook_ttl"`
 	TempDir             string `yaml:"temp_dir"`
 }
@@ -158,6 +163,21 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Printing.IPPUsername == "" {
 		cfg.Printing.IPPUsername = "goprint"
+	}
+	if cfg.Printing.QueueWaitTimeout == "" {
+		cfg.Printing.QueueWaitTimeout = "30s"
+	}
+	if cfg.Printing.MaxUploadBytes == 0 {
+		cfg.Printing.MaxUploadBytes = 50 * 1024 * 1024
+	}
+	if cfg.Printing.MaxCopies == 0 {
+		cfg.Printing.MaxCopies = 100
+	}
+	if cfg.Printing.MaxPDFPages == 0 {
+		cfg.Printing.MaxPDFPages = 500
+	}
+	if cfg.Printing.MaxImagePixels == 0 {
+		cfg.Printing.MaxImagePixels = 50_000_000
 	}
 	if cfg.Printing.ManualDuplexHookTTL == "" {
 		cfg.Printing.ManualDuplexHookTTL = "30m"
@@ -245,6 +265,25 @@ func applyDefaults(cfg *Config) {
 }
 
 func validateConfig(cfg *Config) error {
+	if _, err := parsePositiveDuration(cfg.Printing.QueueWaitTimeout, "printing.queue_wait_timeout"); err != nil {
+		return err
+	}
+	if cfg.Printing.MaxUploadBytes <= 0 {
+		return fmt.Errorf("printing.max_upload_bytes must be positive")
+	}
+	if cfg.Printing.MaxCopies <= 0 {
+		return fmt.Errorf("printing.max_copies must be positive")
+	}
+	if cfg.Printing.MaxPDFPages <= 0 {
+		return fmt.Errorf("printing.max_pdf_pages must be positive")
+	}
+	if cfg.Printing.MaxImagePixels <= 0 {
+		return fmt.Errorf("printing.max_image_pixels must be positive")
+	}
+	if _, err := parsePositiveDuration(cfg.Printing.ManualDuplexHookTTL, "printing.manual_duplex_hook_ttl"); err != nil {
+		return err
+	}
+
 	if cfg.Auth.Enabled {
 		if strings.TrimSpace(cfg.Auth.Feishu.AppID) == "" {
 			return fmt.Errorf("auth.feishu.app_id is required when auth.enabled=true")

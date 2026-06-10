@@ -286,7 +286,7 @@ func intPtr(n *int) string {
 	return fmt.Sprintf("%d", *n)
 }
 
-func downloadExportedFile(ctx context.Context, client *lark.Client, userAccessToken string, fileToken string, filename string) (string, error) {
+func downloadExportedFile(ctx context.Context, cfg *config.Config, client *lark.Client, userAccessToken string, fileToken string, filename string) (string, error) {
 	req := drivev1.NewDownloadExportTaskReqBuilder().
 		FileToken(fileToken).
 		Build()
@@ -313,16 +313,26 @@ func downloadExportedFile(ctx context.Context, client *lark.Client, userAccessTo
 	outPath := f.Name()
 	defer f.Close()
 
-	if _, err := io.Copy(f, resp.File); err != nil {
+	if closer, ok := interface{}(resp.File).(io.Closer); ok {
+		defer closer.Close()
+	}
+
+	maxBytes := cfg.Printing.MaxUploadBytes
+	written, err := io.Copy(f, io.LimitReader(resp.File, maxBytes+1))
+	if err != nil {
 		_ = os.Remove(outPath)
 		return "", fmt.Errorf("failed to write downloaded file: %w", err)
 	}
+	if written > maxBytes {
+		_ = os.Remove(outPath)
+		return "", fmt.Errorf("exported pdf exceeds configured size limit of %d bytes", maxBytes)
+	}
 
-	log.Printf("[feishu-export] downloaded file_token=%s to %s", fileToken, outPath)
+	log.Printf("[feishu-export] downloaded file_token=%s to %s bytes=%d", fileToken, outPath, written)
 	return outPath, nil
 }
 
-func exportFeishuDocToPDF(ctx context.Context, client *lark.Client, userAccessToken string, rawURL string) (pdfPath string, filename string, err error) {
+func exportFeishuDocToPDF(ctx context.Context, cfg *config.Config, client *lark.Client, userAccessToken string, rawURL string) (pdfPath string, filename string, err error) {
 	docType, token, err := parseFeishuURL(rawURL)
 	if err != nil {
 		return "", "", err
@@ -348,7 +358,7 @@ func exportFeishuDocToPDF(ctx context.Context, client *lark.Client, userAccessTo
 		return "", "", err
 	}
 
-	pdfPath, err = downloadExportedFile(ctx, client, userAccessToken, fileToken, doc.Filename)
+	pdfPath, err = downloadExportedFile(ctx, cfg, client, userAccessToken, fileToken, doc.Filename)
 	if err != nil {
 		return "", "", err
 	}
@@ -363,6 +373,11 @@ func PreviewFeishuDocument(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	started := time.Now()
+	log.Printf("[feishu-preview] request start remote=%s content_length=%d", c.ClientIP(), c.Request.ContentLength)
+	defer func() {
+		log.Printf("[feishu-preview] request finished status=%d duration=%s", c.Writer.Status(), time.Since(started).Round(time.Millisecond))
+	}()
 
 	userToken := extractUserAccessToken(c)
 	if userToken == "" {
@@ -383,7 +398,10 @@ func PreviewFeishuDocument(c *gin.Context) {
 		return
 	}
 
+	queueStarted := time.Now()
+	log.Printf("[feishu-preview] waiting submit queue url=%s", req.URL)
 	if err := acquirePrintSubmitQueue(c.Request.Context()); err != nil {
+		log.Printf("[feishu-preview] submit queue unavailable url=%s err=%v", req.URL, err)
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error":      "preview queue is busy or request cancelled",
 			"error_code": "preview_queue_unavailable",
@@ -391,6 +409,7 @@ func PreviewFeishuDocument(c *gin.Context) {
 		})
 		return
 	}
+	log.Printf("[feishu-preview] submit queue acquired url=%s wait=%s", req.URL, time.Since(queueStarted).Round(time.Millisecond))
 	defer releasePrintSubmitQueue()
 
 	client, err := newFeishuClient(cfg)
@@ -399,7 +418,7 @@ func PreviewFeishuDocument(c *gin.Context) {
 		return
 	}
 
-	pdfPath, filename, err := exportFeishuDocToPDF(c.Request.Context(), client, userToken, req.URL)
+	pdfPath, filename, err := exportFeishuDocToPDF(c.Request.Context(), cfg, client, userToken, req.URL)
 	if err != nil {
 		log.Printf("[feishu-export] preview export failed url=%s err=%v", req.URL, err)
 		c.JSON(feishuExportHTTPStatus(err), gin.H{
@@ -410,6 +429,15 @@ func PreviewFeishuDocument(c *gin.Context) {
 		return
 	}
 	defer os.Remove(pdfPath)
+
+	if _, err := enforcePDFPageLimit(cfg, pdfPath); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":      "pdf page count exceeds configured limit or cannot be read",
+			"error_code": "pdf_page_limit_exceeded",
+			"details":    err.Error(),
+		})
+		return
+	}
 
 	previewName := "document.pdf"
 	if filename != "" {
@@ -458,9 +486,23 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 		return
 	}
 
+	cfg, cfgErr := requireConfig()
+	if cfgErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": cfgErr.Error()})
+		return
+	}
+	started := time.Now()
+	log.Printf("[feishu-print] request start remote=%s printer=%s content_length=%d", c.ClientIP(), printerID, c.Request.ContentLength)
+	defer func() {
+		log.Printf("[feishu-print] request finished status=%d duration=%s", c.Writer.Status(), time.Since(started).Round(time.Millisecond))
+	}()
+
 	copies := reqBody.Copies
 	if copies <= 0 {
 		copies = 1
+	}
+	if !validateCopiesOrRespond(c, cfg, copies) {
+		return
 	}
 
 	collate := true
@@ -472,6 +514,10 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 	if nup <= 0 {
 		nup = 1
 	}
+	if nup != 1 && !validNup(nup) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "nup must be 1, 2, 4, or 6"})
+		return
+	}
 
 	scalePercent := reqBody.Scale
 	if scalePercent <= 0 {
@@ -482,7 +528,10 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 		return
 	}
 
+	queueStarted := time.Now()
+	log.Printf("[feishu-print] waiting submit queue printer=%s url=%s", printerID, reqBody.URL)
 	if err := acquirePrintSubmitQueue(c.Request.Context()); err != nil {
+		log.Printf("[feishu-print] submit queue unavailable printer=%s url=%s err=%v", printerID, reqBody.URL, err)
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error":      "print queue is busy or request cancelled",
 			"error_code": "print_queue_unavailable",
@@ -490,13 +539,8 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 		})
 		return
 	}
+	log.Printf("[feishu-print] submit queue acquired printer=%s wait=%s", printerID, time.Since(queueStarted).Round(time.Millisecond))
 	defer releasePrintSubmitQueue()
-
-	cfg, cfgErr := requireConfig()
-	if cfgErr != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": cfgErr.Error()})
-		return
-	}
 
 	client, err := newFeishuClient(cfg)
 	if err != nil {
@@ -504,7 +548,7 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 		return
 	}
 
-	pdfPath, docFilename, err := exportFeishuDocToPDF(c.Request.Context(), client, userToken, reqBody.URL)
+	pdfPath, docFilename, err := exportFeishuDocToPDF(c.Request.Context(), cfg, client, userToken, reqBody.URL)
 	if err != nil {
 		log.Printf("[feishu-export] print export failed url=%s err=%v", reqBody.URL, err)
 		c.JSON(feishuExportHTTPStatus(err), gin.H{
@@ -517,6 +561,14 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 	defer os.Remove(pdfPath)
 
 	printSourcePath := pdfPath
+	if _, err := enforcePDFPageLimit(cfg, printSourcePath); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":      "pdf page count exceeds configured limit or cannot be read",
+			"error_code": "pdf_page_limit_exceeded",
+			"details":    err.Error(),
+		})
+		return
+	}
 
 	pageSelectionCleanup := func() {}
 	if strings.TrimSpace(reqBody.Pages) != "" {

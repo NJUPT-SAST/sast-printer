@@ -102,7 +102,7 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 			_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, "内部错误", messageID)
 			return
 		}
-		pdfPath, docFilename, exportErr := exportFeishuDocToPDF(context.Background(), client, "", raw)
+		pdfPath, docFilename, exportErr := exportFeishuDocToPDF(context.Background(), cfg, client, "", raw)
 		if exportErr != nil {
 			_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, fmt.Sprintf("导出失败：%v", exportErr), messageID)
 			return
@@ -124,6 +124,10 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 	pages, err := countPDFPages(sourcePath)
 	if err != nil {
 		_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, "无法读取文件页数", messageID)
+		return
+	}
+	if err := validatePDFPageLimit(cfg, pages); err != nil {
+		_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, fmt.Sprintf("文件页数超出限制：%v", err), messageID)
 		return
 	}
 
@@ -200,6 +204,13 @@ func downloadBotFile(ctx context.Context, cfg *config.Config, messageID, fileKey
 	if err := resp.WriteFile(outPath); err != nil {
 		_ = os.Remove(outPath)
 		return "", "", nil, fmt.Errorf("write file: %w", err)
+	}
+	if info, err := os.Stat(outPath); err != nil {
+		_ = os.Remove(outPath)
+		return "", "", nil, fmt.Errorf("stat file: %w", err)
+	} else if info.Size() > cfg.Printing.MaxUploadBytes {
+		_ = os.Remove(outPath)
+		return "", "", nil, fmt.Errorf("file exceeds configured size limit of %d bytes", cfg.Printing.MaxUploadBytes)
 	}
 
 	return outPath, fileName, func() { _ = os.Remove(outPath) }, nil
@@ -542,9 +553,9 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		_ = sendSessionText(context.Background(), cfg, session, "请选择打印机")
 		return
 	}
-	if copies < 1 || copies > 99 {
+	if copies < 1 || copies > cfg.Printing.MaxCopies {
 		releaseBotSessionAction(sessionID)
-		_ = sendSessionText(context.Background(), cfg, session, "份数必须为 1-99")
+		_ = sendSessionText(context.Background(), cfg, session, fmt.Sprintf("份数必须为 1-%d", cfg.Printing.MaxCopies))
 		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
 		return
 	}

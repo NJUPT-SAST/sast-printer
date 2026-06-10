@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"mime/multipart"
@@ -79,6 +80,90 @@ func parseScalePercent(raw string) (int, error) {
 		return 0, fmt.Errorf("scale must be an integer between 10 and 400")
 	}
 	return scale, nil
+}
+
+const multipartFormOverheadLimit = 1 << 20
+
+func limitRequestBody(c *gin.Context, cfg *config.Config) {
+	if cfg == nil || cfg.Printing.MaxUploadBytes <= 0 || c.Request.Body == nil {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, cfg.Printing.MaxUploadBytes+multipartFormOverheadLimit)
+}
+
+func isRequestBodyTooLarge(err error) bool {
+	var maxBytesErr *http.MaxBytesError
+	return errors.As(err, &maxBytesErr) || strings.Contains(strings.ToLower(err.Error()), "request body too large")
+}
+
+func parseMultipartFormOrRespond(c *gin.Context, cfg *config.Config) bool {
+	if err := c.Request.ParseMultipartForm(32 << 20); err != nil {
+		if isRequestBodyTooLarge(err) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+				"error":      "uploaded file is too large",
+				"error_code": "upload_too_large",
+				"max_bytes":  cfg.Printing.MaxUploadBytes,
+			})
+			return false
+		}
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "invalid multipart form data",
+			"details": err.Error(),
+		})
+		return false
+	}
+	return true
+}
+
+func cleanupMultipartForm(c *gin.Context) {
+	if c.Request != nil && c.Request.MultipartForm != nil {
+		_ = c.Request.MultipartForm.RemoveAll()
+	}
+}
+
+func formFileOrRespond(c *gin.Context, cfg *config.Config) (*multipart.FileHeader, bool) {
+	file, err := c.FormFile("file")
+	if err != nil {
+		if isRequestBodyTooLarge(err) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+				"error":      "uploaded file is too large",
+				"error_code": "upload_too_large",
+				"max_bytes":  cfg.Printing.MaxUploadBytes,
+			})
+			return nil, false
+		}
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "file is required in multipart form field 'file'",
+		})
+		return nil, false
+	}
+	if file.Size > cfg.Printing.MaxUploadBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+			"error":      "uploaded file is too large",
+			"error_code": "upload_too_large",
+			"max_bytes":  cfg.Printing.MaxUploadBytes,
+		})
+		return nil, false
+	}
+	return file, true
+}
+
+func validateCopiesOrRespond(c *gin.Context, cfg *config.Config, copies int) bool {
+	if copies <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "copies must be a positive integer",
+		})
+		return false
+	}
+	if copies > cfg.Printing.MaxCopies {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":      fmt.Sprintf("copies must be no more than %d", cfg.Printing.MaxCopies),
+			"error_code": "copies_limit_exceeded",
+			"max_copies": cfg.Printing.MaxCopies,
+		})
+		return false
+	}
+	return true
 }
 
 func uploadWorkDir(cfg *config.Config, filename string) string {
@@ -355,6 +440,22 @@ func GetSupportedFileTypes(c *gin.Context) {
 
 // SubmitPrintJob 提交打印任务
 func SubmitPrintJob(c *gin.Context) {
+	cfg, cfgErr := requireConfig()
+	if cfgErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": cfgErr.Error()})
+		return
+	}
+	limitRequestBody(c, cfg)
+	started := time.Now()
+	log.Printf("[print] request start remote=%s content_length=%d", c.ClientIP(), c.Request.ContentLength)
+	defer func() {
+		log.Printf("[print] request finished status=%d duration=%s", c.Writer.Status(), time.Since(started).Round(time.Millisecond))
+	}()
+	if !parseMultipartFormOrRespond(c, cfg) {
+		return
+	}
+	defer cleanupMultipartForm(c)
+
 	printerID := c.PostForm("printer_id")
 	if printerID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -373,6 +474,9 @@ func SubmitPrintJob(c *gin.Context) {
 			return
 		}
 		copies = parsedCopies
+	}
+	if !validateCopiesOrRespond(c, cfg, copies) {
+		return
 	}
 
 	duplexRequested := false
@@ -417,7 +521,11 @@ func SubmitPrintJob(c *gin.Context) {
 		nup = parsedNup
 	}
 
-	scalePercent, err := parseScalePercent(c.Query("scale"))
+	rawScale := c.Query("scale")
+	if strings.TrimSpace(rawScale) == "" {
+		rawScale = c.PostForm("scale")
+	}
+	scalePercent, err := parseScalePercent(rawScale)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -425,17 +533,8 @@ func SubmitPrintJob(c *gin.Context) {
 
 	pages := strings.TrimSpace(c.Query("pages"))
 
-	file, err := c.FormFile("file")
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "file is required in multipart form field 'file'",
-		})
-		return
-	}
-
-	cfg, cfgErr := requireConfig()
-	if cfgErr != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": cfgErr.Error()})
+	file, ok := formFileOrRespond(c, cfg)
+	if !ok {
 		return
 	}
 
@@ -447,7 +546,10 @@ func SubmitPrintJob(c *gin.Context) {
 		return
 	}
 
+	queueStarted := time.Now()
+	log.Printf("[print] waiting submit queue printer=%s filename=%q size=%d", printerID, file.Filename, file.Size)
 	if err := acquirePrintSubmitQueue(c.Request.Context()); err != nil {
+		log.Printf("[print] submit queue unavailable printer=%s filename=%q err=%v", printerID, file.Filename, err)
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error":      "print queue is busy or request cancelled",
 			"error_code": "print_queue_unavailable",
@@ -455,6 +557,7 @@ func SubmitPrintJob(c *gin.Context) {
 		})
 		return
 	}
+	log.Printf("[print] submit queue acquired printer=%s filename=%q wait=%s", printerID, file.Filename, time.Since(queueStarted).Round(time.Millisecond))
 	defer releasePrintSubmitQueue()
 
 	tempPath, cleanupUploaded, sourceHash, err := prepareUploadedSource(c, cfg, file, "goprint")
@@ -480,6 +583,15 @@ func SubmitPrintJob(c *gin.Context) {
 			return
 		}
 		printSourcePath = convertedPath
+	}
+
+	if _, err := enforcePDFPageLimit(cfg, printSourcePath); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":      "pdf page count exceeds configured limit or cannot be read",
+			"error_code": "pdf_page_limit_exceeded",
+			"details":    err.Error(),
+		})
+		return
 	}
 
 	pageSelectionCleanup := func() {}
@@ -759,14 +871,22 @@ func PreviewConvertedDocument(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	file, err := c.FormFile("file")
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "file is required in multipart form field 'file'",
-		})
+	limitRequestBody(c, cfg)
+	started := time.Now()
+	log.Printf("[preview] request start remote=%s content_length=%d", c.ClientIP(), c.Request.ContentLength)
+	defer func() {
+		log.Printf("[preview] request finished status=%d duration=%s", c.Writer.Status(), time.Since(started).Round(time.Millisecond))
+	}()
+	if !parseMultipartFormOrRespond(c, cfg) {
 		return
 	}
+	defer cleanupMultipartForm(c)
+
+	file, ok := formFileOrRespond(c, cfg)
+	if !ok {
+		return
+	}
+	log.Printf("[preview] uploaded filename=%q size=%d", file.Filename, file.Size)
 
 	if !isSupportedUploadFile(cfg, file.Filename) {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -776,7 +896,10 @@ func PreviewConvertedDocument(c *gin.Context) {
 		return
 	}
 
+	queueStarted := time.Now()
+	log.Printf("[preview] waiting submit queue filename=%q size=%d", file.Filename, file.Size)
 	if err := acquirePrintSubmitQueue(c.Request.Context()); err != nil {
+		log.Printf("[preview] submit queue unavailable filename=%q err=%v", file.Filename, err)
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error":      "preview queue is busy or request cancelled",
 			"error_code": "preview_queue_unavailable",
@@ -784,6 +907,7 @@ func PreviewConvertedDocument(c *gin.Context) {
 		})
 		return
 	}
+	log.Printf("[preview] submit queue acquired filename=%q wait=%s", file.Filename, time.Since(queueStarted).Round(time.Millisecond))
 	defer releasePrintSubmitQueue()
 
 	tempPath, cleanupUploaded, sourceHash, err := prepareUploadedSource(c, cfg, file, "goprint-preview")
@@ -808,6 +932,15 @@ func PreviewConvertedDocument(c *gin.Context) {
 			return
 		}
 		previewPath = convertedPath
+	}
+
+	if _, err := enforcePDFPageLimit(cfg, previewPath); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":      "pdf page count exceeds configured limit or cannot be read",
+			"error_code": "pdf_page_limit_exceeded",
+			"details":    err.Error(),
+		})
+		return
 	}
 
 	previewName := strings.TrimSuffix(filepath.Base(file.Filename), filepath.Ext(file.Filename)) + ".pdf"

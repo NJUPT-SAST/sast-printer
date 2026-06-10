@@ -52,6 +52,16 @@ job_store:
 printing:
   # Username used in IPP requests (requesting-user-name)
   ipp_username: goprint
+  # Max time a preview/print request waits for the single conversion/submit lane.
+  queue_wait_timeout: 30s
+  # Max uploaded/exported document size in bytes (default: 50 MiB).
+  max_upload_bytes: 52428800
+  # Max copies accepted from web/API clients.
+  max_copies: 100
+  # Max PDF page count accepted for preview/print processing.
+  max_pdf_pages: 500
+  # Max decoded image pixels for jpg/png to PDF conversion.
+  max_image_pixels: 50000000
   # Manual duplex hook expiration; Go duration format (e.g. 10m, 30m, 1h)
   manual_duplex_hook_ttl: 30m
   # Temporary file directory. All short-lived print/export files are
