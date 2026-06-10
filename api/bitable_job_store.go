@@ -46,9 +46,10 @@ type printJobRecord struct {
 }
 
 type trackableJob struct {
-	JobID     string
-	PrinterID string
-	Status    string
+	JobID       string
+	PrinterID   string
+	Status      string
+	SubmittedAt time.Time
 }
 
 func newBitableJobStore(cfg *config.Config) (*bitableJobStore, error) {
@@ -170,7 +171,13 @@ func (s *bitableJobStore) ListTrackableJobs(ctx context.Context) ([]trackableJob
 			}
 			switch status {
 			case "pending", "held", "processing", "pending_manual_continue":
-				out = append(out, trackableJob{JobID: jobID, PrinterID: printerID, Status: status})
+				submittedAt, _ := fieldAsTime(item.Fields[bitableFieldSubmittedAt])
+				out = append(out, trackableJob{
+					JobID:       jobID,
+					PrinterID:   printerID,
+					Status:      status,
+					SubmittedAt: submittedAt,
+				})
 			}
 		}
 
@@ -180,6 +187,25 @@ func (s *bitableJobStore) ListTrackableJobs(ctx context.Context) ([]trackableJob
 		pageToken = *resp.Data.PageToken
 	}
 
+	return out, nil
+}
+
+func (s *bitableJobStore) ListStaleIncompleteJobs(ctx context.Context, cutoff time.Time) ([]trackableJob, error) {
+	jobs, err := s.ListTrackableJobs(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]trackableJob, 0)
+	for _, job := range jobs {
+		if job.SubmittedAt.IsZero() || !job.SubmittedAt.Before(cutoff) {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(job.Status)) {
+		case "pending", "pending_manual_continue":
+			out = append(out, job)
+		}
+	}
 	return out, nil
 }
 
@@ -264,7 +290,7 @@ func mapRecordToJob(record *larkbitable.AppTableRecord) map[string]interface{} {
 	duplexHook := fieldAsString(fields[bitableFieldDuplexHook])
 	hookExpiresAt := ""
 	if duplexHook != "" {
-		if expiresAt, ok := calcDuplexHookExpiresAt(fields[bitableFieldSubmittedAt]); ok {
+		if expiresAt, ok := calcDuplexHookExpiresAt(fields); ok {
 			hookExpiresAt = expiresAt.In(time.Local).Format("2006-01-02 15:04")
 		}
 	}
@@ -283,17 +309,59 @@ func mapRecordToJob(record *larkbitable.AppTableRecord) map[string]interface{} {
 
 	if hookExpiresAt != "" {
 		job["hook_expires_at"] = hookExpiresAt
+		job["hook_extend_window_seconds"] = manualDuplexExtendWindowSeconds()
 	}
 
 	return job
 }
 
-func calcDuplexHookExpiresAt(submittedRaw interface{}) (time.Time, bool) {
-	submittedAt, ok := fieldAsTime(submittedRaw)
+func calcDuplexHookExpiresAt(fields map[string]interface{}) (time.Time, bool) {
+	if fields == nil {
+		return time.Time{}, false
+	}
+
+	if token := manualDuplexTokenFromHook(fieldAsString(fields[bitableFieldDuplexHook])); token != "" {
+		if pending, ok := manualDuplexPendingByToken(token); ok {
+			return pending.ExpiresAt, true
+		}
+	}
+
+	submittedAt, ok := fieldAsTime(fields[bitableFieldSubmittedAt])
 	if !ok {
 		return time.Time{}, false
 	}
-	return submittedAt.Add(getManualDuplexHookTTL()), true
+
+	printerID := strings.TrimSpace(fieldAsString(fields[bitableFieldPrinterID]))
+	pageCount := fieldAsInt(fields[bitableFieldPageCount])
+	copies := fieldAsInt(fields[bitableFieldCopies])
+	if copies > 1 {
+		pageCount *= copies
+	}
+	return submittedAt.Add(manualDuplexTimeoutForPrinterID(printerID, pageCount)), true
+}
+
+func manualDuplexTokenFromHook(hook string) string {
+	hook = strings.TrimSpace(hook)
+	if hook == "" {
+		return ""
+	}
+
+	if strings.HasPrefix(hook, "bot://manual-duplex/") {
+		return strings.TrimSpace(strings.TrimPrefix(hook, "bot://manual-duplex/"))
+	}
+
+	const marker = "/manual-duplex-hooks/"
+	idx := strings.Index(hook, marker)
+	if idx < 0 {
+		return ""
+	}
+
+	token := hook[idx+len(marker):]
+	token = strings.TrimPrefix(token, "/")
+	if slash := strings.Index(token, "/"); slash >= 0 {
+		token = token[:slash]
+	}
+	return strings.TrimSpace(token)
 }
 
 func fieldAsTime(v interface{}) (time.Time, bool) {

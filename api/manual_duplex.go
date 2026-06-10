@@ -24,6 +24,7 @@ type manualDuplexPending struct {
 	PrinterID         string
 	RemainingFilePath string
 	Copies            int
+	PageCount         int
 	OpenID            string
 	CardID            string
 	CreatedAt         time.Time
@@ -31,7 +32,11 @@ type manualDuplexPending struct {
 	ActionInProgress  bool
 }
 
-const defaultManualDuplexHookTTL = 30 * time.Minute
+const (
+	defaultManualDuplexMinTimeout     = 10 * time.Minute
+	defaultManualDuplexPerPageTimeout = 30 * time.Second
+	defaultManualDuplexExtendWindow   = 3 * time.Minute
+)
 
 var manualDuplexStore = struct {
 	sync.RWMutex
@@ -40,14 +45,14 @@ var manualDuplexStore = struct {
 	items: map[string]manualDuplexPending{},
 }
 
-func saveManualDuplexPending(jobID, printerID, remainingFilePath string, copies int, openID string) (string, time.Time, error) {
+func saveManualDuplexPending(jobID, printerID, remainingFilePath string, copies int, openID string, pageCount int) (string, time.Time, error) {
 	token, err := randomToken(16)
 	if err != nil {
 		return "", time.Time{}, err
 	}
 
 	now := time.Now()
-	ttl := getManualDuplexHookTTL()
+	ttl := manualDuplexTimeoutForPrinterID(printerID, pageCount)
 	expiresAt := now.Add(ttl)
 
 	manualDuplexStore.Lock()
@@ -57,6 +62,7 @@ func saveManualDuplexPending(jobID, printerID, remainingFilePath string, copies 
 		PrinterID:         printerID,
 		RemainingFilePath: remainingFilePath,
 		Copies:            copies,
+		PageCount:         pageCount,
 		OpenID:            openID,
 		CreatedAt:         now,
 		ExpiresAt:         expiresAt,
@@ -103,6 +109,36 @@ func claimManualDuplexPending(token string) (manualDuplexPending, bool) {
 	return item, true
 }
 
+func extendManualDuplexPending(token string) (manualDuplexPending, bool, error) {
+	manualDuplexStore.Lock()
+	defer manualDuplexStore.Unlock()
+
+	item, ok := manualDuplexStore.items[token]
+	if !ok {
+		return manualDuplexPending{}, false, nil
+	}
+
+	now := time.Now()
+	if now.After(item.ExpiresAt) {
+		_ = os.Remove(item.RemainingFilePath)
+		delete(manualDuplexStore.items, token)
+		return manualDuplexPending{}, false, nil
+	}
+	if item.ActionInProgress {
+		return manualDuplexPending{}, false, nil
+	}
+
+	remaining := time.Until(item.ExpiresAt)
+	window := manualDuplexExtendWindow()
+	if remaining > window {
+		return item, true, fmt.Errorf("manual duplex hook can only be extended within %s of expiration", window.Round(time.Second))
+	}
+
+	item.ExpiresAt = now.Add(manualDuplexMinTimeout())
+	manualDuplexStore.items[token] = item
+	return item, true, nil
+}
+
 func releaseManualDuplexPending(token string) {
 	manualDuplexStore.Lock()
 	defer manualDuplexStore.Unlock()
@@ -119,6 +155,10 @@ func deleteManualDuplexPending(token string) {
 	manualDuplexStore.Lock()
 	defer manualDuplexStore.Unlock()
 	delete(manualDuplexStore.items, token)
+}
+
+func manualDuplexPendingByToken(token string) (manualDuplexPending, bool) {
+	return getManualDuplexPending(token)
 }
 
 func prepareManualDuplexFiles(sourcePath string, printerCfg config.PrinterConfig) (string, string, func(), error) {
@@ -251,23 +291,74 @@ func randomToken(n int) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-func getManualDuplexHookTTL() time.Duration {
+func manualDuplexMinTimeout() time.Duration {
 	cfg := getConfig()
 	if cfg == nil {
-		return defaultManualDuplexHookTTL
+		return defaultManualDuplexMinTimeout
 	}
 
-	raw := cfg.Printing.ManualDuplexHookTTL
+	raw := cfg.Printing.ManualDuplexMinTimeout
 	if raw == "" {
-		return defaultManualDuplexHookTTL
+		raw = cfg.Printing.ManualDuplexHookTTL
+	}
+	if raw == "" {
+		return defaultManualDuplexMinTimeout
 	}
 
-	ttl, err := time.ParseDuration(raw)
-	if err != nil || ttl <= 0 {
-		return defaultManualDuplexHookTTL
+	timeout, err := time.ParseDuration(raw)
+	if err != nil || timeout <= 0 {
+		return defaultManualDuplexMinTimeout
 	}
 
-	return ttl
+	return timeout
+}
+
+func manualDuplexExtendWindow() time.Duration {
+	cfg := getConfig()
+	if cfg == nil {
+		return defaultManualDuplexExtendWindow
+	}
+
+	window, err := time.ParseDuration(cfg.Printing.ManualDuplexExtendWindow)
+	if err != nil || window <= 0 {
+		return defaultManualDuplexExtendWindow
+	}
+	return window
+}
+
+func manualDuplexPerPageTimeout(printerCfg config.PrinterConfig) time.Duration {
+	timeout, err := time.ParseDuration(printerCfg.ManualDuplexPerPageTimeout)
+	if err != nil || timeout <= 0 {
+		return defaultManualDuplexPerPageTimeout
+	}
+	return timeout
+}
+
+func manualDuplexTimeout(printerCfg config.PrinterConfig, pageCount int) time.Duration {
+	minTimeout := manualDuplexMinTimeout()
+	perPageTimeout := manualDuplexPerPageTimeout(printerCfg)
+
+	timeout := minTimeout
+	if pageCount > 0 {
+		calculated := time.Duration(pageCount) * perPageTimeout
+		if calculated > timeout {
+			timeout = calculated
+		}
+	}
+
+	return timeout
+}
+
+func manualDuplexTimeoutForPrinterID(printerID string, pageCount int) time.Duration {
+	printerCfg, err := resolvePrinter(printerID)
+	if err != nil {
+		return manualDuplexMinTimeout()
+	}
+	return manualDuplexTimeout(printerCfg, pageCount)
+}
+
+func manualDuplexExtendWindowSeconds() int {
+	return int(manualDuplexExtendWindow().Seconds())
 }
 
 func countPDFPages(sourcePath string) (int, error) {

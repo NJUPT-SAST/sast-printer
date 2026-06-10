@@ -991,6 +991,7 @@ paths:
       description: |
         手动双面打印工作流的第二步。
         用户在打印完第一面后，将纸张翻转放回打印机，调用此接口打印第二面。
+        该 hook 接口不要求飞书鉴权，令牌本身用于定位待继续的任务。
       operationId: continueManualDuplexPrint
       parameters:
         - name: token
@@ -1044,8 +1045,64 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-        '401':
-          description: 未授权（缺少或无效的飞书 user_access_token）
+
+  /api/manual-duplex-hooks/{token}/extend:
+    post:
+      tags:
+        - 手动双面打印
+      summary: 延长手动双面打印等待时间
+      description: |
+        在手动双面 hook 即将过期时延长等待时间。
+        仅当剩余时间小于等于 `printing.manual_duplex_extend_window` 时可调用；
+        成功后过期时间重置为当前时间 + `printing.manual_duplex_min_timeout`。
+        该 hook 接口不要求飞书鉴权，令牌本身用于定位待继续的任务。
+      operationId: extendManualDuplexPrint
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: 手动双面打印令牌（来自提交任务的响应）
+          schema:
+            type: string
+          example: "abc123def456"
+      responses:
+        '200':
+          description: 手动双面等待时间延长成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  printer:
+                    type: string
+                    description: 打印机ID
+                    example: "color-printer"
+                  duplex:
+                    type: boolean
+                    example: true
+                  status:
+                    type: string
+                    enum: [pending_manual_continue]
+                    example: "pending_manual_continue"
+                  message:
+                    type: string
+                    example: "Manual duplex hook extended"
+                  hook_expires_at:
+                    type: string
+                    description: 延长后的令牌过期时间，格式为 yyyy-MM-dd HH:mm
+                    example: "2026-03-30 22:12"
+                  hook_extend_window_seconds:
+                    type: integer
+                    description: 允许延时的剩余秒数窗口
+                    example: 180
+        '404':
+          description: 令牌不存在、已过期、已使用或正在处理
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 当前剩余时间仍大于允许延时窗口
           content:
             application/json:
               schema:
@@ -1059,6 +1116,7 @@ paths:
       description: |
         取消手动双面打印工作流。
         如果用户在第一面打印后不想继续打印第二面，可调用此接口取消流程。
+        该 hook 接口不要求飞书鉴权，令牌本身用于定位待取消的任务。
       operationId: cancelManualDuplexPrint
       parameters:
         - name: token
@@ -1095,12 +1153,6 @@ paths:
                     example: true
         '404':
           description: 令牌不存在或已使用
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '401':
-          description: 未授权（缺少或无效的飞书 user_access_token）
           content:
             application/json:
               schema:
@@ -1264,8 +1316,12 @@ components:
           example: "/manual-duplex-hooks/abc123def456/continue"
         hook_expires_at:
           type: string
-          description: hook 过期时间，格式为 yyyy-MM-dd HH:mm（submitted_at + manual_duplex_hook_ttl，仅 duplex_hook 存在时返回）
+          description: hook 过期时间，格式为 yyyy-MM-dd HH:mm（submitted_at + 动态手动双面超时时间，仅 duplex_hook 存在时返回）
           example: "2026-04-01 16:09"
+        hook_extend_window_seconds:
+          type: integer
+          description: 手动双面 hook 可延时的剩余秒数窗口（仅 duplex_hook 存在时返回）
+          example: 180
 
     CupsPrintJob:
       type: object
@@ -1350,6 +1406,10 @@ components:
           type: string
           description: 令牌过期时间，格式为 yyyy-MM-dd HH:mm（仅在手动双面模式返回）
           example: "2026-03-30 22:12"
+        hook_extend_window_seconds:
+          type: integer
+          description: 手动双面 hook 可延时的剩余秒数窗口（仅在手动双面模式返回）
+          example: 180
 
     SupportedFileTypesResponse:
       type: object

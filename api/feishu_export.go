@@ -697,7 +697,7 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 			return
 		}
 
-		token, expiresAt, err := saveManualDuplexPending(initialJobID, printerID, secondPassToStore, 1, "")
+		token, expiresAt, err := saveManualDuplexPending(initialJobID, printerID, secondPassToStore, 1, "", printPageCount*copies)
 		if err != nil {
 			_ = os.Remove(secondPassToStore)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -715,16 +715,17 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 		}
 
 		c.JSON(http.StatusCreated, gin.H{
-			"job_id":          initialJobID,
-			"printer":         printerID,
-			"copies":          copies,
-			"collate":         collate,
-			"status":          "pending",
-			"duplex":          true,
-			"note":            printerCfg.Note,
-			"message":         "First pass submitted. Use hook_url to print remaining pages.",
-			"hook_url":        hookURL,
-			"hook_expires_at": expiresAt.In(time.Local).Format("2006-01-02 15:04"),
+			"job_id":                     initialJobID,
+			"printer":                    printerID,
+			"copies":                     copies,
+			"collate":                    collate,
+			"status":                     "pending",
+			"duplex":                     true,
+			"note":                       printerCfg.Note,
+			"message":                    "First pass submitted. Use hook_url to print remaining pages.",
+			"hook_url":                   hookURL,
+			"hook_expires_at":            expiresAt.In(time.Local).Format("2006-01-02 15:04"),
+			"hook_extend_window_seconds": manualDuplexExtendWindowSeconds(),
 		})
 
 		if user, ok := currentAuthUser(c); ok {

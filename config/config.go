@@ -73,14 +73,16 @@ type FeishuBitableConfig struct {
 
 // PrintingConfig 打印相关全局配置
 type PrintingConfig struct {
-	IPPUsername         string `yaml:"ipp_username"`
-	QueueWaitTimeout    string `yaml:"queue_wait_timeout"`
-	MaxUploadBytes      int64  `yaml:"max_upload_bytes"`
-	MaxCopies           int    `yaml:"max_copies"`
-	MaxPDFPages         int    `yaml:"max_pdf_pages"`
-	MaxImagePixels      int    `yaml:"max_image_pixels"`
-	ManualDuplexHookTTL string `yaml:"manual_duplex_hook_ttl"`
-	TempDir             string `yaml:"temp_dir"`
+	IPPUsername              string `yaml:"ipp_username"`
+	QueueWaitTimeout         string `yaml:"queue_wait_timeout"`
+	MaxUploadBytes           int64  `yaml:"max_upload_bytes"`
+	MaxCopies                int    `yaml:"max_copies"`
+	MaxPDFPages              int    `yaml:"max_pdf_pages"`
+	MaxImagePixels           int    `yaml:"max_image_pixels"`
+	ManualDuplexHookTTL      string `yaml:"manual_duplex_hook_ttl"`
+	ManualDuplexMinTimeout   string `yaml:"manual_duplex_min_timeout"`
+	ManualDuplexExtendWindow string `yaml:"manual_duplex_extend_window"`
+	TempDir                  string `yaml:"temp_dir"`
 }
 
 // OfficeConversionConfig Office 文档转换配置（通过 Python gRPC 服务）
@@ -96,17 +98,18 @@ type OfficeConversionConfig struct {
 
 // PrinterConfig 单台打印机配置
 type PrinterConfig struct {
-	ID                string `yaml:"id"`
-	URI               string `yaml:"uri"`
-	Visible           bool   `yaml:"visible"`
-	Reverse           bool   `yaml:"reverse"`
-	DuplexMode        string `yaml:"duplex_mode"`
-	FirstPass         string `yaml:"first_pass"`
-	PadToEven         *bool  `yaml:"pad_to_even"`
-	ReverseFirstPass  bool   `yaml:"reverse_first_pass"`
-	ReverseSecondPass bool   `yaml:"reverse_second_pass"`
-	RotateSecondPass  bool   `yaml:"rotate_second_pass"`
-	Note              string `yaml:"note"`
+	ID                         string `yaml:"id"`
+	URI                        string `yaml:"uri"`
+	Visible                    bool   `yaml:"visible"`
+	Reverse                    bool   `yaml:"reverse"`
+	DuplexMode                 string `yaml:"duplex_mode"`
+	FirstPass                  string `yaml:"first_pass"`
+	PadToEven                  *bool  `yaml:"pad_to_even"`
+	ReverseFirstPass           bool   `yaml:"reverse_first_pass"`
+	ReverseSecondPass          bool   `yaml:"reverse_second_pass"`
+	RotateSecondPass           bool   `yaml:"rotate_second_pass"`
+	ManualDuplexPerPageTimeout string `yaml:"manual_duplex_per_page_timeout"`
+	Note                       string `yaml:"note"`
 }
 
 // BotConfig 飞书 Bot 配置
@@ -179,8 +182,14 @@ func applyDefaults(cfg *Config) {
 	if cfg.Printing.MaxImagePixels == 0 {
 		cfg.Printing.MaxImagePixels = 50_000_000
 	}
-	if cfg.Printing.ManualDuplexHookTTL == "" {
-		cfg.Printing.ManualDuplexHookTTL = "30m"
+	if cfg.Printing.ManualDuplexMinTimeout == "" {
+		cfg.Printing.ManualDuplexMinTimeout = strings.TrimSpace(cfg.Printing.ManualDuplexHookTTL)
+	}
+	if cfg.Printing.ManualDuplexMinTimeout == "" {
+		cfg.Printing.ManualDuplexMinTimeout = "10m"
+	}
+	if cfg.Printing.ManualDuplexExtendWindow == "" {
+		cfg.Printing.ManualDuplexExtendWindow = "3m"
 	}
 	if cfg.Printing.TempDir == "" {
 		cfg.Printing.TempDir = "/tmp/goprint"
@@ -252,6 +261,9 @@ func applyDefaults(cfg *Config) {
 			v := true
 			p.PadToEven = &v
 		}
+		if p.ManualDuplexPerPageTimeout == "" {
+			p.ManualDuplexPerPageTimeout = "30s"
+		}
 	}
 
 	if cfg.Bot.BotName == "" {
@@ -280,7 +292,15 @@ func validateConfig(cfg *Config) error {
 	if cfg.Printing.MaxImagePixels <= 0 {
 		return fmt.Errorf("printing.max_image_pixels must be positive")
 	}
-	if _, err := parsePositiveDuration(cfg.Printing.ManualDuplexHookTTL, "printing.manual_duplex_hook_ttl"); err != nil {
+	if strings.TrimSpace(cfg.Printing.ManualDuplexHookTTL) != "" {
+		if _, err := parsePositiveDuration(cfg.Printing.ManualDuplexHookTTL, "printing.manual_duplex_hook_ttl"); err != nil {
+			return err
+		}
+	}
+	if _, err := parsePositiveDuration(cfg.Printing.ManualDuplexMinTimeout, "printing.manual_duplex_min_timeout"); err != nil {
+		return err
+	}
+	if _, err := parsePositiveDuration(cfg.Printing.ManualDuplexExtendWindow, "printing.manual_duplex_extend_window"); err != nil {
 		return err
 	}
 
@@ -379,6 +399,9 @@ func validateConfig(cfg *Config) error {
 		firstPass := strings.ToLower(strings.TrimSpace(p.FirstPass))
 		if firstPass != "even" && firstPass != "odd" {
 			return fmt.Errorf("invalid first_pass for printer %s: %s", p.ID, p.FirstPass)
+		}
+		if _, err := parsePositiveDuration(p.ManualDuplexPerPageTimeout, fmt.Sprintf("printers[%s].manual_duplex_per_page_timeout", p.ID)); err != nil {
+			return err
 		}
 
 		seen[p.ID] = true

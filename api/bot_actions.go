@@ -703,7 +703,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 			return
 		}
 
-		token, _, err := saveManualDuplexPending(jobID, printerID, secondPassPath, 1, openID)
+		token, _, err := saveManualDuplexPending(jobID, printerID, secondPassPath, 1, openID, printPageCount*copies)
 		if err != nil {
 			log.Printf("[bot] save duplex pending: %v", err)
 			_ = sendSessionText(context.Background(), cfg, session, "保存双面任务失败")

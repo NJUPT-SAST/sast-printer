@@ -731,7 +731,7 @@ func SubmitPrintJob(c *gin.Context) {
 			return
 		}
 
-		token, expiresAt, err := saveManualDuplexPending(initialJobID, printerID, secondPassToStore, 1, "")
+		token, expiresAt, err := saveManualDuplexPending(initialJobID, printerID, secondPassToStore, 1, "", printPageCount*copies)
 		if err != nil {
 			_ = os.Remove(secondPassToStore)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -744,16 +744,17 @@ func SubmitPrintJob(c *gin.Context) {
 		hookURL := fmt.Sprintf("/manual-duplex-hooks/%s/continue", token)
 
 		c.JSON(http.StatusCreated, gin.H{
-			"job_id":          initialJobID,
-			"printer":         printerID,
-			"copies":          copies,
-			"collate":         collate,
-			"status":          "pending",
-			"duplex":          true,
-			"note":            printerCfg.Note,
-			"message":         "First pass submitted. Use hook_url to print remaining pages.",
-			"hook_url":        hookURL,
-			"hook_expires_at": expiresAt.In(time.Local).Format("2006-01-02 15:04"),
+			"job_id":                     initialJobID,
+			"printer":                    printerID,
+			"copies":                     copies,
+			"collate":                    collate,
+			"status":                     "pending",
+			"duplex":                     true,
+			"note":                       printerCfg.Note,
+			"message":                    "First pass submitted. Use hook_url to print remaining pages.",
+			"hook_url":                   hookURL,
+			"hook_expires_at":            expiresAt.In(time.Local).Format("2006-01-02 15:04"),
+			"hook_extend_window_seconds": manualDuplexExtendWindowSeconds(),
 		})
 
 		if user, ok := currentAuthUser(c); ok {
@@ -1012,6 +1013,38 @@ func ContinueManualDuplexPrint(c *gin.Context) {
 			}
 		}()
 	}
+}
+
+func ExtendManualDuplexPrint(c *gin.Context) {
+	token := c.Param("token")
+	pending, ok, err := extendManualDuplexPending(token)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "manual duplex hook not found, expired, already used, or already processing",
+		})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":                      "manual duplex hook cannot be extended yet",
+			"details":                    err.Error(),
+			"printer":                    pending.PrinterID,
+			"duplex":                     true,
+			"status":                     "pending_manual_continue",
+			"hook_expires_at":            pending.ExpiresAt.In(time.Local).Format("2006-01-02 15:04"),
+			"hook_extend_window_seconds": manualDuplexExtendWindowSeconds(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"printer":                    pending.PrinterID,
+		"duplex":                     true,
+		"status":                     "pending_manual_continue",
+		"message":                    "Manual duplex hook extended",
+		"hook_expires_at":            pending.ExpiresAt.In(time.Local).Format("2006-01-02 15:04"),
+		"hook_extend_window_seconds": manualDuplexExtendWindowSeconds(),
+	})
 }
 
 func CancelManualDuplexPrint(c *gin.Context) {

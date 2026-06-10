@@ -62,6 +62,7 @@ func SetupRouter() *gin.Engine {
 	// manualDuplex.Use(authMiddleware)
 	{
 		manualDuplex.POST("/:token/continue", ContinueManualDuplexPrint) // 继续手动双面打印
+		manualDuplex.POST("/:token/extend", ExtendManualDuplexPrint)     // 延长手动双面等待时间
 		manualDuplex.POST("/:token/cancel", CancelManualDuplexPrint)     // 取消手动双面打印
 	}
 
