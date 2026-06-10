@@ -277,7 +277,18 @@ func processCardAction(_ context.Context, cfg *config.Config, event *callback.Ca
 			StatusText:      "⏳ 已收到打印请求，正在提交任务",
 		})
 		if ok {
-			go handleBotPrint(cfg, values, openID)
+			go handleBotPrint(cfg, values, openID, false)
+		}
+		return resp
+	case "confirm_print":
+		resp, ok := buildPrintConflictActionResponse(values, openID, printConflictCardState{
+			Disabled:     true,
+			ContinueText: "处理中...",
+			CancelText:   "处理中...",
+			StatusText:   "⏳ 已确认，正在提交打印任务",
+		})
+		if ok {
+			go handleBotPrint(cfg, values, openID, true)
 		}
 		return resp
 	case "continue_duplex":
@@ -456,6 +467,46 @@ func buildDuplexCardActionResponse(values map[string]interface{}, openID string,
 	}, shouldProcess
 }
 
+func buildPrintConflictActionResponse(values map[string]interface{}, openID string, state printConflictCardState) (*callback.CardActionTriggerResponse, bool) {
+	sessionID := cardStr(values, "session_id")
+	session, ok := getBotSession(sessionID)
+	if !ok {
+		return cardActionToast("warning", "卡片已失效，请重新发送文件"), false
+	}
+	if session.RequesterOpenID != "" && openID != "" && openID != session.RequesterOpenID {
+		return cardActionToast("error", "这张打印卡片不属于你，请由发起人确认。"), false
+	}
+
+	shouldProcess := !session.ActionInProgress
+	if session.ActionInProgress {
+		state.Disabled = true
+		state.ContinueText = "处理中..."
+		state.CancelText = "处理中..."
+		state.StatusText = "⏳ 打印请求正在处理，请勿重复点击"
+	}
+	state.PrinterID = strings.TrimSpace(cardStr(values, "printer_id"))
+	if state.PrinterID == "" {
+		state.PrinterID = session.PrinterID
+	}
+	if copies, err := strconv.Atoi(cardStr(values, "copies")); err == nil {
+		state.Copies = copies
+	}
+	state.Pages = strings.TrimSpace(cardStr(values, "pages"))
+	if nup, err := strconv.Atoi(cardStr(values, "nup")); err == nil {
+		state.Nup = nup
+	}
+	state.Scale = strings.TrimSpace(cardStr(values, "scale"))
+	state.Duplex = strings.TrimSpace(cardStr(values, "duplex"))
+	if state.Duplex == "" {
+		state.Duplex = "off"
+	}
+
+	return &callback.CardActionTriggerResponse{
+		Toast: &callback.Toast{Type: "success", Content: "已收到请求"},
+		Card:  &callback.Card{Type: "raw", Data: buildPrintConflictCardData(sessionID, state)},
+	}, shouldProcess
+}
+
 func buildDisabledPrintConfigCardData(cfg *config.Config, session botCardSession, sessionID string, values map[string]interface{}, state printConfigCardState) (map[string]interface{}, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
@@ -516,7 +567,7 @@ func handleBotCancel(cfg *config.Config, values map[string]interface{}, openID s
 	log.Printf("[bot] print config cancelled session=%s", sessionID)
 }
 
-func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID string) {
+func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID string, confirmed bool) {
 	sessionID := cardStr(values, "session_id")
 	session, ok := claimBotSessionAction(sessionID)
 	if !ok {
@@ -607,6 +658,33 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		_ = sendSessionText(context.Background(), cfg, session, "该打印机不支持所选双面模式")
 		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
 		return
+	}
+
+	if !confirmed && !strings.EqualFold(cardStr(values, "confirmed"), "true") {
+		if warning := activeJobWarningForPrinter(context.Background(), cfg, printerID); warning != nil {
+			card, err := buildPrintConflictCard(sessionID, printConflictCardState{
+				Warning:        warning,
+				PrinterID:      printerID,
+				Copies:         copies,
+				Pages:          pagesStr,
+				Nup:            nup,
+				Scale:          strconv.Itoa(scalePercent),
+				Duplex:         duplex,
+				OriginalAction: "print",
+				CancelStage:    "print_details",
+			})
+			if err != nil {
+				log.Printf("[bot] build print conflict card session=%s: %v", sessionID, err)
+				_ = sendSessionText(context.Background(), cfg, session, warning.Message)
+			} else if delivery, sendErr := sendBotCard(context.Background(), cfg, chatID, session.ChatType, session.RequesterOpenID, card, replyMsgID); sendErr != nil {
+				log.Printf("[bot] send print conflict card session=%s: %v", sessionID, sendErr)
+				_ = sendSessionText(context.Background(), cfg, session, warning.Message)
+			} else {
+				updateBotSessionDelivery(sessionID, delivery)
+			}
+			releaseBotSessionAction(sessionID)
+			return
+		}
 	}
 
 	printSourcePath := session.SourcePath

@@ -101,6 +101,23 @@ func updateBotSessionPrinter(id, printerID string) {
 	botSessions[id] = s
 }
 
+func updateBotSessionDelivery(id string, delivery botCardDelivery) {
+	botSessionsMu.Lock()
+	defer botSessionsMu.Unlock()
+
+	s, ok := botSessions[id]
+	if !ok {
+		return
+	}
+	if delivery.CardID != "" {
+		s.CardID = delivery.CardID
+	}
+	if delivery.EphemeralMessageID != "" {
+		s.EphemeralMessageID = delivery.EphemeralMessageID
+	}
+	botSessions[id] = s
+}
+
 func deleteBotSession(id string) {
 	botSessionsMu.Lock()
 	defer botSessionsMu.Unlock()

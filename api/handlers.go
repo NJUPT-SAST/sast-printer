@@ -351,6 +351,12 @@ func ListPrinters(c *gin.Context) {
 // GetPrinterInfo 获取指定打印机的详细信息
 func GetPrinterInfo(c *gin.Context) {
 	printerID := c.Param("id")
+	cfg, err := requireConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	printerCfg, err := resolveVisiblePrinter(printerID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "printer_id": printerID})
@@ -374,7 +380,7 @@ func GetPrinterInfo(c *gin.Context) {
 	}
 	printer.ID = printerCfg.ID
 
-	c.JSON(http.StatusOK, gin.H{
+	response := gin.H{
 		"id":                  printer.ID,
 		"name":                printer.Name,
 		"description":         printer.Description,
@@ -389,7 +395,29 @@ func GetPrinterInfo(c *gin.Context) {
 		"reverse_second_pass": printerCfg.ReverseSecondPass,
 		"rotate_second_pass":  printerCfg.RotateSecondPass,
 		"note":                printerCfg.Note,
-	})
+	}
+	if warning := activeJobWarningForPrinter(c.Request.Context(), cfg, printerID); warning != nil {
+		response["active_job_warning"] = warning
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+func activeJobWarningForPrinter(ctx context.Context, cfg *config.Config, printerID string) *printerActiveJobWarning {
+	if cfg == nil || !cfg.JobStore.Enabled {
+		return nil
+	}
+	store, err := newBitableJobStore(cfg)
+	if err != nil {
+		log.Printf("[printer] skip active job warning printer=%s err=%v", printerID, err)
+		return nil
+	}
+	warning, err := store.ActiveWarningForPrinter(ctx, printerID, time.Now())
+	if err != nil {
+		log.Printf("[printer] active job warning query failed printer=%s err=%v", printerID, err)
+		return nil
+	}
+	return warning
 }
 
 // GetSupportedFileTypes 返回当前支持上传/转换的文件扩展名（不带点），始终包含 pdf。
