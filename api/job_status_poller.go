@@ -31,7 +31,10 @@ var (
 	once       sync.Once
 )
 
-const staleBitableJobCleanupInterval = 47*time.Minute + 17*time.Second
+const (
+	staleBitableJobCleanupInterval = 47*time.Minute + 17*time.Second
+	staleBitableJobMaxAge          = 12 * time.Hour
+)
 
 func InitJobStatusPoller(cfg *config.Config) *pendingJobTracker {
 	return initJobStatusPoller(cfg)
@@ -77,7 +80,7 @@ func (t *pendingJobTracker) AddPendingJobWithStatus(jobID, printerID, recordStat
 	t.jobs[jobID] = &trackedJob{
 		JobID:        jobID,
 		PrinterID:    printerID,
-		RecordStatus: strings.ToLower(strings.TrimSpace(recordStatus)),
+		RecordStatus: normalizedJobStatus(recordStatus),
 		LastCheck:    time.Now(),
 	}
 
@@ -229,7 +232,7 @@ func (t *pendingJobTracker) completeStaleBitableJobs() {
 		return
 	}
 
-	cutoff := time.Now().Add(-24 * time.Hour)
+	cutoff := time.Now().Add(-staleBitableJobMaxAge)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
