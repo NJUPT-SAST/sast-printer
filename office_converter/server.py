@@ -34,6 +34,14 @@ def parse_accepted_formats(raw: str) -> set[str]:
     return out
 
 
+def _path_is_under(path: pathlib.Path, root: pathlib.Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 def _unwrap_rpc_client(factory_result, kind: str):
     if isinstance(factory_result, tuple):
         if len(factory_result) >= 2:
@@ -162,8 +170,15 @@ def convert_to_pdf(source_path: str, output_dir: str, accepted_formats: set[str]
 
 class OfficeConverterService(office_converter_pb2_grpc.OfficeConverterServiceServicer):
     def __init__(self, output_dir: str, accepted_formats: set[str]):
-        self._output_dir = output_dir
+        self._output_dir = str(pathlib.Path(output_dir).expanduser().resolve(strict=False))
+        self._source_roots = [pathlib.Path(self._output_dir)]
         self._accepted_formats = accepted_formats
+
+    def _validate_source_path(self, source_path: str) -> str:
+        src = pathlib.Path(source_path).expanduser().resolve(strict=False)
+        if not any(_path_is_under(src, root) for root in self._source_roots):
+            raise ValueError("source_file_path must be under output_dir")
+        return str(src)
 
     def ConvertToPdf(self, request, context):
         if _PYWPS_IMPORT_ERROR is not None:
@@ -190,7 +205,8 @@ class OfficeConverterService(office_converter_pb2_grpc.OfficeConverterServiceSer
             )
 
         try:
-            output_file_path = convert_to_pdf(source_path, self._output_dir, self._accepted_formats)
+            safe_source_path = self._validate_source_path(source_path)
+            output_file_path = convert_to_pdf(safe_source_path, self._output_dir, self._accepted_formats)
             return office_converter_pb2.ConversionResponse(
                 success=True,
                 output_file_path=output_file_path,

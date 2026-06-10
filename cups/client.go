@@ -17,10 +17,11 @@ type CupsClient struct {
 	Host     string
 	Port     int
 	Username string
+	UseTLS   bool
 }
 
 // NewCupsClient 创建新的CUPS客户端
-func NewCupsClient(host string, port int, username string) *CupsClient {
+func NewCupsClient(host string, port int, username string, useTLS bool) *CupsClient {
 	if strings.TrimSpace(username) == "" {
 		username = "goprint"
 	}
@@ -29,16 +30,17 @@ func NewCupsClient(host string, port int, username string) *CupsClient {
 		Host:     host,
 		Port:     port,
 		Username: username,
+		UseTLS:   useTLS,
 	}
 }
 
 func (c *CupsClient) newIPPClient() *ipp.CUPSClient {
-	return ipp.NewCUPSClient(c.Host, c.Port, c.Username, "", false)
+	return ipp.NewCUPSClient(c.Host, c.Port, c.Username, "", c.UseTLS)
 }
 
 // Connect 连接到CUPS服务
 func (c *CupsClient) Connect() error {
-	log.Printf("Connecting to CUPS: %s:%d\n", c.Host, c.Port)
+	log.Printf("Connecting to CUPS: %s:%d tls=%t\n", c.Host, c.Port, c.UseTLS)
 	client := c.newIPPClient()
 	_, err := client.GetPrinters([]string{ipp.AttributePrinterName})
 	if err != nil {

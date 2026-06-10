@@ -8,6 +8,7 @@ import (
 	"goprint/cups"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -194,7 +195,11 @@ func downloadBotFile(ctx context.Context, cfg *config.Config, messageID, fileKey
 		return "", "", nil, fmt.Errorf("download error: code=%d msg=%s", resp.Code, resp.Msg)
 	}
 
-	f, err := os.CreateTemp(tempDir(), "bot-*")
+	downloadDir := uploadWorkDir(cfg, fileName)
+	if err := os.MkdirAll(downloadDir, 0o755); err != nil {
+		return "", "", nil, err
+	}
+	f, err := os.CreateTemp(downloadDir, "bot-*"+strings.ToLower(filepath.Ext(fileName)))
 	if err != nil {
 		return "", "", nil, err
 	}

@@ -66,6 +66,19 @@ func isImageConvertible(name string) bool {
 	return supportedImageExt[fileExtLower(name)]
 }
 
+func pathIsUnderDir(path string, dir string) bool {
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	resolvedDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(resolvedDir, resolvedPath)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
 func convertImageToPDF(cfg *config.Config, sourcePath string) (string, error) {
 	if err := os.MkdirAll(cfg.OfficeConversion.OutputDir, 0o755); err != nil {
 		return "", fmt.Errorf("failed to create conversion output dir: %w", err)
@@ -195,6 +208,9 @@ func convertOfficeToPDF(ctx context.Context, cfg *config.Config, sourcePath stri
 	}
 	if info.IsDir() {
 		return "", fmt.Errorf("converted output path is a directory")
+	}
+	if !pathIsUnderDir(convertedPath, cfg.OfficeConversion.OutputDir) {
+		return "", fmt.Errorf("converted output path is outside office_conversion.output_dir")
 	}
 
 	return convertedPath, nil

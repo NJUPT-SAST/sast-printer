@@ -620,7 +620,7 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 	}
 	defer scaleCleanup()
 
-	printerCfg, err := resolvePrinter(printerID)
+	printerCfg, err := resolveVisiblePrinter(printerID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "printer_id": printerID})
 		return

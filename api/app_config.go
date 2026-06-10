@@ -52,37 +52,49 @@ func resolvePrinter(printerID string) (config.PrinterConfig, error) {
 	return printer, nil
 }
 
-func parsePrinterURI(printerURI string) (host string, port int, printerName string, err error) {
+func resolveVisiblePrinter(printerID string) (config.PrinterConfig, error) {
+	printer, err := resolvePrinter(printerID)
+	if err != nil {
+		return config.PrinterConfig{}, err
+	}
+	if !printer.Visible {
+		return config.PrinterConfig{}, fmt.Errorf("printer not available: %s", printerID)
+	}
+	return printer, nil
+}
+
+func parsePrinterURI(printerURI string) (host string, port int, printerName string, useTLS bool, err error) {
 	u, err := url.Parse(printerURI)
 	if err != nil {
-		return "", 0, "", fmt.Errorf("invalid printer uri: %w", err)
+		return "", 0, "", false, fmt.Errorf("invalid printer uri: %w", err)
 	}
 
 	if !strings.EqualFold(u.Scheme, "ipp") && !strings.EqualFold(u.Scheme, "ipps") {
-		return "", 0, "", fmt.Errorf("unsupported printer uri scheme: %s", u.Scheme)
+		return "", 0, "", false, fmt.Errorf("unsupported printer uri scheme: %s", u.Scheme)
 	}
+	useTLS = strings.EqualFold(u.Scheme, "ipps")
 
 	host = u.Hostname()
 	if host == "" {
-		return "", 0, "", fmt.Errorf("printer uri missing host")
+		return "", 0, "", false, fmt.Errorf("printer uri missing host")
 	}
 
 	port = 631
 	if rawPort := u.Port(); rawPort != "" {
 		parsedPort, parseErr := strconv.Atoi(rawPort)
 		if parseErr != nil {
-			return "", 0, "", fmt.Errorf("invalid printer uri port: %s", rawPort)
+			return "", 0, "", false, fmt.Errorf("invalid printer uri port: %s", rawPort)
 		}
 		port = parsedPort
 	}
 
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 	if len(parts) < 2 || parts[0] != "printers" || parts[1] == "" {
-		return "", 0, "", fmt.Errorf("printer uri path should be /printers/<name>")
+		return "", 0, "", false, fmt.Errorf("printer uri path should be /printers/<name>")
 	}
 
 	printerName = parts[1]
-	return host, port, printerName, nil
+	return host, port, printerName, useTLS, nil
 }
 
 func newCupsClientForPrinter(printer config.PrinterConfig) (*cups.CupsClient, string, error) {
@@ -91,12 +103,12 @@ func newCupsClientForPrinter(printer config.PrinterConfig) (*cups.CupsClient, st
 		return nil, "", err
 	}
 
-	host, port, printerName, err := parsePrinterURI(printer.URI)
+	host, port, printerName, useTLS, err := parsePrinterURI(printer.URI)
 	if err != nil {
 		return nil, "", fmt.Errorf("invalid printer uri for %s: %w", printer.ID, err)
 	}
 
-	client := cups.NewCupsClient(host, port, cfg.Printing.IPPUsername)
+	client := cups.NewCupsClient(host, port, cfg.Printing.IPPUsername, useTLS)
 	return client, printerName, nil
 }
 

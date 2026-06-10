@@ -6,10 +6,12 @@ import (
 	"goprint/api"
 	"goprint/config"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -75,12 +77,15 @@ func main() {
 	}
 
 	router := api.SetupRouter()
+	addr := net.JoinHostPort(cfg.Server.Host, strconv.Itoa(cfg.Server.Port))
 	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler: router,
+		Addr:              addr,
+		Handler:           router,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
-	fmt.Printf("Running on http://localhost:%d\n", cfg.Server.Port)
+	fmt.Printf("Running on http://%s\n", addr)
 
 	go func() {
 		<-rootCtx.Done()

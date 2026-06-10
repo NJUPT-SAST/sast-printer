@@ -351,7 +351,7 @@ func ListPrinters(c *gin.Context) {
 // GetPrinterInfo 获取指定打印机的详细信息
 func GetPrinterInfo(c *gin.Context) {
 	printerID := c.Param("id")
-	printerCfg, err := resolvePrinter(printerID)
+	printerCfg, err := resolveVisiblePrinter(printerID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "printer_id": printerID})
 		return
@@ -644,7 +644,7 @@ func SubmitPrintJob(c *gin.Context) {
 	}
 	defer scaleCleanup()
 
-	printerCfg, err := resolvePrinter(printerID)
+	printerCfg, err := resolveVisiblePrinter(printerID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "printer_id": printerID})
 		return
