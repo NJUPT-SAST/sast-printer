@@ -52,6 +52,20 @@ type trackableJob struct {
 	SubmittedAt time.Time
 }
 
+type printerActiveJobWarning struct {
+	Type          string    `json:"type"`
+	Message       string    `json:"message"`
+	JobID         string    `json:"job_id"`
+	PrinterID     string    `json:"printer_id"`
+	FileName      string    `json:"file_name,omitempty"`
+	Status        string    `json:"status"`
+	UserName      string    `json:"user_name,omitempty"`
+	SubmittedAt   string    `json:"submitted_at,omitempty"`
+	HookExpiresAt string    `json:"hook_expires_at,omitempty"`
+	SubmittedTime time.Time `json:"-"`
+	ExpiresAt     time.Time `json:"-"`
+}
+
 func newBitableJobStore(cfg *config.Config) (*bitableJobStore, error) {
 	if !cfg.JobStore.Enabled {
 		return nil, fmt.Errorf("job_store is disabled")
@@ -165,7 +179,7 @@ func (s *bitableJobStore) ListTrackableJobs(ctx context.Context) ([]trackableJob
 			}
 			jobID := strings.TrimSpace(fieldAsString(item.Fields[bitableFieldJobID]))
 			printerID := strings.TrimSpace(fieldAsString(item.Fields[bitableFieldPrinterID]))
-			status := strings.ToLower(strings.TrimSpace(fieldAsString(item.Fields[bitableFieldStatus])))
+			status := normalizedJobStatus(fieldAsString(item.Fields[bitableFieldStatus]))
 			if jobID == "" || printerID == "" {
 				continue
 			}
@@ -201,12 +215,94 @@ func (s *bitableJobStore) ListStaleIncompleteJobs(ctx context.Context, cutoff ti
 		if job.SubmittedAt.IsZero() || !job.SubmittedAt.Before(cutoff) {
 			continue
 		}
-		switch strings.ToLower(strings.TrimSpace(job.Status)) {
+		switch normalizedJobStatus(job.Status) {
 		case "pending", "pending_manual_continue":
 			out = append(out, job)
 		}
 	}
 	return out, nil
+}
+
+func (s *bitableJobStore) ActiveWarningForPrinter(ctx context.Context, printerID string, now time.Time) (*printerActiveJobWarning, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	printerID = strings.TrimSpace(printerID)
+	if printerID == "" {
+		return nil, fmt.Errorf("printer_id is required")
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	var printingWarning *printerActiveJobWarning
+	var manualWarning *printerActiveJobWarning
+	pageToken := ""
+
+	for {
+		reqBuilder := larkbitable.NewListAppTableRecordReqBuilder().
+			AppToken(s.appToken).
+			TableId(s.tableID).
+			UserIdType(larkbitable.UserIdTypeListAppTableRecordOpenId).
+			PageSize(100)
+		if pageToken != "" {
+			reqBuilder = reqBuilder.PageToken(pageToken)
+		}
+
+		resp, err := s.client.Bitable.AppTableRecord.List(ctx, reqBuilder.Build())
+		if err != nil {
+			return nil, fmt.Errorf("bitable list records failed: %w", err)
+		}
+		if resp == nil || !resp.Success() || resp.Data == nil {
+			if resp == nil {
+				return nil, fmt.Errorf("bitable list records failed: empty response")
+			}
+			return nil, fmt.Errorf("bitable list records failed: code=%d msg=%s request_id=%s", resp.Code, resp.Msg, resp.RequestId())
+		}
+
+		for _, item := range resp.Data.Items {
+			if item == nil || item.Fields == nil {
+				continue
+			}
+			if strings.TrimSpace(fieldAsString(item.Fields[bitableFieldPrinterID])) != printerID {
+				continue
+			}
+
+			status := normalizedJobStatus(fieldAsString(item.Fields[bitableFieldStatus]))
+			switch status {
+			case "pending":
+				warning := mapRecordToActiveJobWarning(item.Fields, "printing")
+				if newerActiveWarning(warning, printingWarning) {
+					printingWarning = warning
+				}
+			case "pending_manual_continue":
+				duplexHook := fieldAsString(item.Fields[bitableFieldDuplexHook])
+				if duplexHook == "" {
+					continue
+				}
+				expiresAt, ok := calcDuplexHookExpiresAt(item.Fields)
+				if !ok || !expiresAt.After(now) {
+					continue
+				}
+				warning := mapRecordToActiveJobWarning(item.Fields, "manual_duplex")
+				warning.ExpiresAt = expiresAt
+				warning.HookExpiresAt = expiresAt.In(time.Local).Format("2006-01-02 15:04")
+				if newerActiveWarning(warning, manualWarning) {
+					manualWarning = warning
+				}
+			}
+		}
+
+		if resp.Data.HasMore == nil || !*resp.Data.HasMore || resp.Data.PageToken == nil || *resp.Data.PageToken == "" {
+			break
+		}
+		pageToken = *resp.Data.PageToken
+	}
+
+	if manualWarning != nil {
+		return manualWarning, nil
+	}
+	return printingWarning, nil
 }
 
 func (s *bitableJobStore) ListJobsByUser(ctx context.Context, user feishuUserInfo, limit int) ([]map[string]interface{}, error) {
@@ -313,6 +409,69 @@ func mapRecordToJob(record *larkbitable.AppTableRecord) map[string]interface{} {
 	}
 
 	return job
+}
+
+func mapRecordToActiveJobWarning(fields map[string]interface{}, warningType string) *printerActiveJobWarning {
+	submittedAt, _ := fieldAsTime(fields[bitableFieldSubmittedAt])
+	warning := &printerActiveJobWarning{
+		Type:          warningType,
+		JobID:         fieldAsString(fields[bitableFieldJobID]),
+		PrinterID:     fieldAsString(fields[bitableFieldPrinterID]),
+		FileName:      fieldAsString(fields[bitableFieldFileName]),
+		Status:        normalizedJobStatus(fieldAsString(fields[bitableFieldStatus])),
+		UserName:      fieldAsPersonName(fields[bitableFieldUser]),
+		SubmittedTime: submittedAt,
+	}
+	if !submittedAt.IsZero() {
+		warning.SubmittedAt = submittedAt.In(time.Local).Format("2006-01-02 15:04")
+	}
+	warning.Message = formatActiveJobWarningMessage(warning)
+	return warning
+}
+
+func formatActiveJobWarningMessage(warning *printerActiveJobWarning) string {
+	if warning == nil {
+		return ""
+	}
+	name := strings.TrimSpace(warning.UserName)
+	if name == "" {
+		name = "有人"
+	}
+	action := "正在打印"
+	if warning.Type == "manual_duplex" {
+		action = "正在进行手动双面打印翻面"
+	}
+	return fmt.Sprintf("%s%s。请去对应打印机出纸口观察是否有未打印完成的页面并提醒对方及时拿取文件。这也可能是误判。", name, action)
+}
+
+func newerActiveWarning(candidate, current *printerActiveJobWarning) bool {
+	if candidate == nil {
+		return false
+	}
+	if current == nil {
+		return true
+	}
+	if !candidate.ExpiresAt.IsZero() || !current.ExpiresAt.IsZero() {
+		if current.ExpiresAt.IsZero() {
+			return true
+		}
+		if candidate.ExpiresAt.IsZero() {
+			return false
+		}
+		return candidate.ExpiresAt.After(current.ExpiresAt)
+	}
+	if current.SubmittedTime.IsZero() {
+		return true
+	}
+	if candidate.SubmittedTime.IsZero() {
+		return false
+	}
+	return candidate.SubmittedTime.After(current.SubmittedTime)
+}
+
+func normalizedJobStatus(status string) string {
+	status = strings.ToLower(strings.TrimSpace(status))
+	return strings.ReplaceAll(status, "-", "_")
 }
 
 func calcDuplexHookExpiresAt(fields map[string]interface{}) (time.Time, bool) {
@@ -432,12 +591,20 @@ func fieldAsPersonIDs(v interface{}) []string {
 				}
 			}
 		}
+	case map[string]interface{}:
+		if id := fieldAsString(val["id"]); id != "" {
+			ids = append(ids, id)
+		}
 	case []map[string]interface{}:
 		for _, m := range val {
 			id := fieldAsString(m["id"])
 			if id != "" {
 				ids = append(ids, id)
 			}
+		}
+	case map[string]string:
+		if id := strings.TrimSpace(val["id"]); id != "" {
+			ids = append(ids, id)
 		}
 	case []map[string]string:
 		for _, m := range val {
@@ -448,6 +615,72 @@ func fieldAsPersonIDs(v interface{}) []string {
 		}
 	}
 	return ids
+}
+
+func fieldAsPersonName(v interface{}) string {
+	switch val := v.(type) {
+	case []interface{}:
+		for _, item := range val {
+			if m, ok := item.(map[string]interface{}); ok {
+				if name := fieldAsString(m["name"]); name != "" {
+					return name
+				}
+				if name := fieldAsString(m["en_name"]); name != "" {
+					return name
+				}
+				if id := fieldAsString(m["id"]); id != "" {
+					return id
+				}
+			}
+		}
+	case map[string]interface{}:
+		if name := fieldAsString(val["name"]); name != "" {
+			return name
+		}
+		if name := fieldAsString(val["en_name"]); name != "" {
+			return name
+		}
+		if id := fieldAsString(val["id"]); id != "" {
+			return id
+		}
+	case []map[string]interface{}:
+		for _, m := range val {
+			if name := fieldAsString(m["name"]); name != "" {
+				return name
+			}
+			if name := fieldAsString(m["en_name"]); name != "" {
+				return name
+			}
+			if id := fieldAsString(m["id"]); id != "" {
+				return id
+			}
+		}
+	case map[string]string:
+		if name := strings.TrimSpace(val["name"]); name != "" {
+			return name
+		}
+		if name := strings.TrimSpace(val["en_name"]); name != "" {
+			return name
+		}
+		if id := strings.TrimSpace(val["id"]); id != "" {
+			return id
+		}
+	case []map[string]string:
+		for _, m := range val {
+			if name := strings.TrimSpace(m["name"]); name != "" {
+				return name
+			}
+			if name := strings.TrimSpace(m["en_name"]); name != "" {
+				return name
+			}
+			if id := strings.TrimSpace(m["id"]); id != "" {
+				return id
+			}
+		}
+	default:
+		return fieldAsString(v)
+	}
+	return ""
 }
 
 func fieldAsString(v interface{}) string {
