@@ -31,6 +31,12 @@ var (
 	once       sync.Once
 )
 
+const staleBitableJobCleanupInterval = 47*time.Minute + 17*time.Second
+
+func InitJobStatusPoller(cfg *config.Config) *pendingJobTracker {
+	return initJobStatusPoller(cfg)
+}
+
 // initJobStatusPoller 初始化任务状态轮询器
 func initJobStatusPoller(cfg *config.Config) *pendingJobTracker {
 	once.Do(func() {
@@ -112,11 +118,19 @@ func (t *pendingJobTracker) restorePendingJobs() {
 
 // pollLoop 后台轮询循环，定期检查任务状态
 func (t *pendingJobTracker) pollLoop() {
-	ticker := time.NewTicker(30 * time.Second) // 检查间隔
-	defer ticker.Stop()
+	statusTicker := time.NewTicker(30 * time.Second) // 检查间隔
+	defer statusTicker.Stop()
 
-	for range ticker.C {
-		t.checkPendingJobs()
+	staleTicker := time.NewTicker(staleBitableJobCleanupInterval)
+	defer staleTicker.Stop()
+
+	for {
+		select {
+		case <-statusTicker.C:
+			t.checkPendingJobs()
+		case <-staleTicker.C:
+			t.completeStaleBitableJobs()
+		}
 	}
 }
 
@@ -208,6 +222,40 @@ func (t *pendingJobTracker) removePendingJob(jobID string) {
 
 func (t *pendingJobTracker) RemovePendingJob(jobID string) {
 	t.removePendingJob(jobID)
+}
+
+func (t *pendingJobTracker) completeStaleBitableJobs() {
+	if t == nil || t.store == nil {
+		return
+	}
+
+	cutoff := time.Now().Add(-24 * time.Hour)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	jobs, err := t.store.ListStaleIncompleteJobs(ctx, cutoff)
+	if err != nil {
+		log.Printf("[job-poller] failed to list stale pending bitable jobs: %v", err)
+		return
+	}
+	if len(jobs) == 0 {
+		return
+	}
+
+	for _, job := range jobs {
+		updateCtx, updateCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := t.store.UpdateJobStatus(updateCtx, job.JobID, "completed")
+		updateCancel()
+		if err != nil {
+			log.Printf("[job-poller] failed to complete stale bitable job job_id=%s status=%s submitted_at=%s err=%v",
+				job.JobID, job.Status, job.SubmittedAt.Format(time.RFC3339), err)
+			continue
+		}
+
+		log.Printf("[job-poller] completed stale bitable job job_id=%s status=%s submitted_at=%s",
+			job.JobID, job.Status, job.SubmittedAt.Format(time.RFC3339))
+		t.removePendingJob(job.JobID)
+	}
 }
 
 // GetPendingJobCount 获取正在跟踪的 pending 任务数

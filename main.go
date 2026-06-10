@@ -76,6 +76,8 @@ func main() {
 		log.Fatalf("Failed to start office converter service: %v", err)
 	}
 
+	api.InitJobStatusPoller(cfg)
+
 	router := api.SetupRouter()
 	addr := net.JoinHostPort(cfg.Server.Host, strconv.Itoa(cfg.Server.Port))
 	srv := &http.Server{
