@@ -9,7 +9,7 @@ import (
 
 var printSubmitQueue = make(chan struct{}, 1)
 
-const defaultPrintQueueWaitTimeout = 30 * time.Second
+const defaultPrintQueueWaitTimeout = 60 * time.Second
 
 func init() {
 	printSubmitQueue <- struct{}{}

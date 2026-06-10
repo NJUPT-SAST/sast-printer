@@ -165,7 +165,7 @@ func applyDefaults(cfg *Config) {
 		cfg.Printing.IPPUsername = "goprint"
 	}
 	if cfg.Printing.QueueWaitTimeout == "" {
-		cfg.Printing.QueueWaitTimeout = "30s"
+		cfg.Printing.QueueWaitTimeout = "60s"
 	}
 	if cfg.Printing.MaxUploadBytes == 0 {
 		cfg.Printing.MaxUploadBytes = 50 * 1024 * 1024
