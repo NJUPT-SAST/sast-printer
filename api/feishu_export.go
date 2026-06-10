@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"goprint/api/pdfutil"
 	"goprint/config"
 	"goprint/cups"
 
@@ -514,7 +515,7 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 	if nup <= 0 {
 		nup = 1
 	}
-	if nup != 1 && !validNup(nup) {
+	if nup != 1 && !pdfutil.ValidNup(nup) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "nup must be 1, 2, 4, or 6"})
 		return
 	}

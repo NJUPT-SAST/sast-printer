@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"goprint/api/conversion"
+	"goprint/api/pdfutil"
 	"goprint/config"
 	"goprint/cups"
 	"log"
@@ -571,7 +572,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)
 		return
 	}
-	if nup != 1 && !validNup(nup) {
+	if nup != 1 && !pdfutil.ValidNup(nup) {
 		releaseBotSessionAction(sessionID)
 		_ = sendSessionText(context.Background(), cfg, session, "无效的缩印选项（支持 1/2/4/6）")
 		resendPrintConfigCard(cfg, session, sessionID, chatID, idType)

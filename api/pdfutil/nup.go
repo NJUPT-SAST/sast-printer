@@ -1,4 +1,4 @@
-package api
+package pdfutil
 
 import (
 	"fmt"
@@ -12,7 +12,7 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
 )
 
-// LayoutResult N-up layout calculation result
+// LayoutResult is an N-up layout calculation result.
 type LayoutResult struct {
 	Cols   int
 	Rows   int
@@ -28,14 +28,11 @@ var nupGrids = map[int]LayoutResult{
 	6: {Cols: 3, Rows: 2},
 }
 
-func validNup(nup int) bool {
+func ValidNup(nup int) bool {
 	_, ok := nupGrids[nup]
 	return ok
 }
 
-// getOptimalLayout calculates optimal N-up layout.
-// Tests portrait and landscape A4 orientations × column/row combinations,
-// selects the one with highest page coverage.
 func getOptimalLayout(pageWidth, pageHeight float64, nup int) LayoutResult {
 	if pageWidth <= 0 || pageHeight <= 0 {
 		if g, ok := nupGrids[nup]; ok {
@@ -83,14 +80,9 @@ func getOptimalLayout(pageWidth, pageHeight float64, nup int) LayoutResult {
 	return best
 }
 
-// createNupPDF creates an N-up imposition PDF using pdfcpu.
-// sourcePath: source PDF
-// nup: 2/4/6
-// direction: "horizontal" | "vertical"
-// selectedPages: nil=all pages; non-nil=specific page numbers (1-based)
-// Returns output path, cleanup function, and error.
-func createNupPDF(sourcePath string, nup int, direction string, selectedPages []int) (string, func(), error) {
-	if !validNup(nup) {
+// CreateNupPDF creates an N-up imposition PDF using pdfcpu.
+func CreateNupPDF(sourcePath string, nup int, direction string, selectedPages []int, tempRoot string) (string, func(), error) {
+	if !ValidNup(nup) {
 		return "", nil, fmt.Errorf("unsupported nup: %d", nup)
 	}
 
@@ -117,7 +109,7 @@ func createNupPDF(sourcePath string, nup int, direction string, selectedPages []
 	refDim := pageDims[indices[0]-1]
 	layout := getOptimalLayout(refDim.Width, refDim.Height, nup)
 
-	workDir, err := os.MkdirTemp(tempDir(), "goprint-nup-")
+	workDir, err := os.MkdirTemp(tempRoot, "goprint-nup-")
 	if err != nil {
 		return "", nil, err
 	}
@@ -131,7 +123,6 @@ func createNupPDF(sourcePath string, nup int, direction string, selectedPages []
 	cellW := sheetW / float64(layout.Cols)
 	cellH := sheetH / float64(layout.Rows)
 
-	// Step 1: Scale each page to cell size
 	scaledPaths := make([]string, 0, len(indices))
 	for i, pageNum := range indices {
 		scaledPath := filepath.Join(workDir, fmt.Sprintf("scaled-%04d.pdf", i))
@@ -148,12 +139,10 @@ func createNupPDF(sourcePath string, nup int, direction string, selectedPages []
 		scaledPaths = append(scaledPaths, scaledPath)
 	}
 
-	// Step 2: Reorder for vertical direction
 	if direction == "vertical" && layout.Rows > 1 && layout.Cols > 1 {
 		reorderForVertical(scaledPaths, layout.Cols, layout.Rows)
 	}
 
-	// Step 3: N-up merge
 	outFile, err := os.CreateTemp(workDir, "nup-output-*.pdf")
 	if err != nil {
 		cleanup()
@@ -175,7 +164,6 @@ func createNupPDF(sourcePath string, nup int, direction string, selectedPages []
 	return outPath, func() { _ = os.RemoveAll(workDir) }, nil
 }
 
-// reorderForVertical reorders pages for vertical (column-major) fill
 func reorderForVertical(paths []string, cols, rows int) {
 	reordered := make([]string, len(paths))
 	idx := 0

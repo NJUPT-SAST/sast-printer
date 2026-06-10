@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"goprint/api/pdfutil"
 	"goprint/config"
 	"io"
 	"os"
@@ -815,5 +816,5 @@ func applyNupLayout(sourcePath string, nup int) (string, func(), error) {
 		return sourcePath, func() {}, nil
 	}
 
-	return createNupPDF(sourcePath, nup, "horizontal", nil)
+	return pdfutil.CreateNupPDF(sourcePath, nup, "horizontal", nil, tempDir())
 }
