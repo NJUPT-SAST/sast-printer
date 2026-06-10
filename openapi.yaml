@@ -456,7 +456,13 @@ paths:
       tags:
         - 打印机管理
       summary: 获取打印机详细信息
-      description: 获取指定打印机的详细配置和状态信息
+      description: |
+        获取指定打印机的详细配置和状态信息。
+
+        如果飞书多维表任务存储中存在该打印机的活跃任务，响应会额外包含
+        `active_job_warning`：
+        - 存在 `pending` 任务时，提示该打印机正在打印。
+        - 存在 `pending_manual_continue` / `pending-manual-continue` 任务且手动双面 hook 未过期时，提示正在进行手动双面翻面流程。
       operationId: getPrinterInfo
       parameters:
         - name: id
@@ -498,7 +504,7 @@ paths:
         - 打印任务
       summary: 提交打印任务
       description: |
-        上传 PDF 文件并提交打印任务。
+        上传文件并提交打印任务。支持 PDF 直出、Office 文件转换为 PDF，以及 jpg/jpeg/png 图片转 PDF。
         
         支持的功能：
         - 自动双面打印（duplex_mode=auto）
@@ -594,7 +600,7 @@ paths:
                 file:
                   type: string
                   format: binary
-                  description: 要打印的文件（支持 pdf/doc/docx/ppt/pptx，Office 文件会自动转换为 PDF）
+                  description: 要打印的文件（支持 pdf、office_conversion.accepted_formats 中配置的 Office 格式、jpg/jpeg/png；非 PDF 文件会自动转换为 PDF）
       responses:
         '201':
           description: 打印任务提交成功
@@ -682,7 +688,7 @@ paths:
       summary: 转换文档并返回预览 PDF
       description: |
         上传文件后仅执行转换并返回 PDF 流用于前端预览，不提交打印任务。
-        支持 PDF 直出预览及 Office 文件转换后预览。
+        支持 PDF 直出预览、Office 文件转换后预览，以及 jpg/jpeg/png 图片转 PDF 预览。
       operationId: previewConvertedDocument
       requestBody:
         required: true
@@ -696,7 +702,7 @@ paths:
                 file:
                   type: string
                   format: binary
-                  description: 要预览的文件（支持 pdf/doc/docx/ppt/pptx）
+                  description: 要预览的文件（支持 pdf、office_conversion.accepted_formats 中配置的 Office 格式、jpg/jpeg/png）
       responses:
         '200':
           description: 预览转换成功，返回 PDF 二进制流
@@ -737,7 +743,7 @@ paths:
       summary: 获取支持的文件类型
       description: |
         返回当前系统支持上传的文件扩展名列表（不带点）。
-        始终包含 `pdf`，其余类型来自 `office_conversion.accepted_formats` 配置。
+        始终包含 `pdf` 和 `jpg/jpeg/png`，其余类型来自 `office_conversion.accepted_formats` 配置。
       operationId: getSupportedFileTypes
       responses:
         '200':
@@ -1215,6 +1221,55 @@ components:
         tenant_key:
           type: string
 
+    PrinterActiveJobWarning:
+      type: object
+      description: |
+        访问打印机详情时返回的活跃任务提示。仅当该打印机存在未完成的打印任务或未过期的手动双面翻面流程时出现。
+      properties:
+        type:
+          type: string
+          description: 提示类型
+          enum: [printing, manual_duplex]
+          example: "manual_duplex"
+        message:
+          type: string
+          description: 可直接展示给用户的提示文案
+          example: "Alice正在进行手动双面打印翻面。请去对应打印机出纸口观察是否有未打印完成的页面并提醒对方及时拿取文件。这也可能是误判。"
+        job_id:
+          type: string
+          description: 关联的 CUPS 打印任务 ID
+          example: "123"
+        printer_id:
+          type: string
+          description: 打印机 ID
+          example: "sast-printer"
+        file_name:
+          type: string
+          description: 关联文件名
+          example: "document.pdf"
+        status:
+          type: string
+          description: 归一化后的任务状态
+          example: "pending_manual_continue"
+        user_name:
+          type: string
+          description: 飞书昵称；取不到昵称时可能回退为 open_id
+          example: "Alice"
+        submitted_at:
+          type: string
+          description: 提交时间，格式为 yyyy-MM-dd HH:mm
+          example: "2026-06-11 10:30"
+        hook_expires_at:
+          type: string
+          description: 手动双面 hook 过期时间，格式为 yyyy-MM-dd HH:mm；仅 manual_duplex 类型返回
+          example: "2026-06-11 10:40"
+      required:
+        - type
+        - message
+        - job_id
+        - printer_id
+        - status
+
     Printer:
       type: object
       properties:
@@ -1277,6 +1332,8 @@ components:
           type: string
           description: 打印机备注
           example: "Remember to load special paper for important documents"
+        active_job_warning:
+          $ref: '#/components/schemas/PrinterActiveJobWarning'
 
     BitablePrintJob:
       type: object

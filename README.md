@@ -123,13 +123,13 @@ docker exec sast-office-converter sh -lc "fc-list | wc -l"
 ### 打印机接口
 
 - `GET /api/printers`：获取打印机列表
-- `GET /api/printers/:id`：获取打印机详情
+- `GET /api/printers/:id`：获取打印机详情；如该打印机存在活跃任务，响应可能包含 `active_job_warning`
 
 ### 任务接口
 
 - `POST /api/jobs`：提交打印任务
 - `POST /api/jobs/preview`：转换文件并返回预览 PDF
-- `GET /api/jobs/supported-file-types`：获取当前支持的文件类型列表
+- `GET /api/jobs/supported-file-types`：获取当前支持的文件类型列表（PDF、配置的 Office 格式、jpg/jpeg/png）
 - `GET /api/jobs`：获取任务列表
 - `GET /api/jobs/:id`：获取任务详情/状态
 - `DELETE /api/jobs/:id`：删除任务记录（不会向 CUPS 下发取消）
@@ -142,6 +142,7 @@ docker exec sast-office-converter sh -lc "fc-list | wc -l"
 ### 手动双面 Hook 接口
 
 - `POST /api/manual-duplex-hooks/:token/continue`：提交手动双面剩余页面
+- `POST /api/manual-duplex-hooks/:token/extend`：在允许延时窗口内延长手动双面等待时间
 - `POST /api/manual-duplex-hooks/:token/cancel`：取消手动双面并清理暂存文件
 
 ### 飞书 Bot 接口
@@ -181,7 +182,6 @@ bot:
   encrypt_key: ""                         # 若开启事件加密则填写
   bot_name: "GoPrint"
   card_timeout: 10m
-  work_dir: /tmp/bot-files
 ```
 
 ### 交互流程
@@ -192,6 +192,8 @@ bot:
 Bot 回复参数配置卡片（打印机、份数、页码范围、缩放、缩印、单双面）
        ↓
 用户修改参数 → 点击「开始打印」
+       ↓
+如所选打印机存在活跃任务，Bot 提示确认是否仍然打印
        ↓
 Bot 提交打印任务 → 保存记录到多维表格
 ```
@@ -397,6 +399,8 @@ curl -sS -X POST http://localhost:5001/api/jobs/feishu \
 - `reason`：CUPS/IPP 原始原因（`job-state-reason`）
 - `raw_state`：IPP 原始状态码
 
+启用 `job_store.enabled` 时，后台会定期同步 CUPS 任务状态到飞书多维表。除此之外，系统每隔 `47m17s` 会查询一次多维表中仍为 `pending` / `pending_manual_continue` 的异常记录；如果提交时间早于 12 小时前，会将其手动标记为 `completed`，用于清理已经无法从 CUPS 侧可靠确认的历史任务。
+
 ## 手动双面说明
 
 - 启用方式：为打印机配置 `duplex_mode: manual`
@@ -411,6 +415,9 @@ curl -sS -X POST http://localhost:5001/api/jobs/feishu \
 - `rotate_second_pass` 控制二轮文件是否旋转 180 度
 - `pad_to_even` 控制奇数页时是否自动补空白页到偶数
 - 二轮行为：访问返回的 `hook_url`，系统提交剩余页（奇数页）
+- Hook 过期时间按打印页数动态计算：`max(printing.manual_duplex_min_timeout, 打印页数 * printers[].manual_duplex_per_page_timeout)`
+- 当剩余时间小于等于 `printing.manual_duplex_extend_window` 时，可调用 `POST /api/manual-duplex-hooks/:token/extend` 延时；成功后过期时间重置为当前时间 + `printing.manual_duplex_min_timeout`
+- Hook 接口不走飞书鉴权，令牌本身用于定位待继续的任务
 - Hook 是一次性的，成功触发后将失效
 
 ## 配置文件
@@ -435,7 +442,14 @@ auth:
 
 printing:
     ipp_username: goprint
-    manual_duplex_hook_ttl: 30m
+    queue_wait_timeout: 60s
+    max_upload_bytes: 52428800
+    max_copies: 100
+    max_pdf_pages: 500
+    max_image_pixels: 50000000
+    manual_duplex_min_timeout: 10m
+    manual_duplex_extend_window: 3m
+    temp_dir: /tmp/goprint
 
 sane_api:
     target_url: http://192.168.101.37:8080
@@ -469,7 +483,6 @@ bot:
     encrypt_key: your_encrypt_key
     bot_name: GoPrint
     card_timeout: 10m
-    work_dir: /tmp/bot-files
 
 file_type_defaults:
     pdf:
@@ -506,6 +519,7 @@ printers:
     reverse_first_pass: false
     reverse_second_pass: false
     rotate_second_pass: false
+    manual_duplex_per_page_timeout: 30s
     note: ""
 ```
 
@@ -531,7 +545,15 @@ printers:
 ### Printing
 
 - `printing.ipp_username`：IPP 请求用户名（默认 `goprint`）
-- `printing.manual_duplex_hook_ttl`：手动双面 hook 有效期（默认 `30m`）
+- `printing.queue_wait_timeout`：打印/预览请求等待全局提交队列的最长时间（默认 `60s`）
+- `printing.max_upload_bytes`：上传/导出文件大小限制，单位字节（默认 `52428800`，即 50 MiB）
+- `printing.max_copies`：允许的最大打印份数（默认 `100`）
+- `printing.max_pdf_pages`：允许处理的最大 PDF 页数（默认 `500`）
+- `printing.max_image_pixels`：jpg/png 转 PDF 前允许解码的最大像素数（默认 `50000000`）
+- `printing.manual_duplex_min_timeout`：手动双面 hook 最短等待时间（默认 `10m`）
+- `printing.manual_duplex_extend_window`：允许用户延长手动双面等待时间的剩余时间窗口（默认 `3m`）
+- `printing.manual_duplex_hook_ttl`：兼容旧配置；未设置 `manual_duplex_min_timeout` 时作为最短等待时间回退值
+- `printing.temp_dir`：短期上传、预览、导出、手动双面等临时文件目录（默认 `/tmp/goprint`）
 
 ### Sane API
 
@@ -566,7 +588,6 @@ printers:
 - `bot.encrypt_key`：飞书事件订阅的 Encrypt Key
 - `bot.bot_name`：Bot 显示名称（默认 `GoPrint`）
 - `bot.card_timeout`：消息卡片超时时间（默认 `10m`）
-- `bot.work_dir`：Bot 下载文件的临时目录（默认 `/tmp/bot-files`）
 
 ### File Type Defaults
 
@@ -592,4 +613,5 @@ printers:
 - `printers[].reverse_first_pass`：首轮页序反转（默认 `false`）
 - `printers[].reverse_second_pass`：二轮页序反转（默认 `false`）
 - `printers[].rotate_second_pass`：二轮旋转 180 度（默认 `false`）
+- `printers[].manual_duplex_per_page_timeout`：手动双面按页增加的等待时间（默认 `30s`）
 - `printers[].note`：该打印机的说明文字
