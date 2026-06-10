@@ -278,21 +278,6 @@ func disableCardButtons(ctx context.Context, cfg *config.Config, cardID string) 
 	return nil
 }
 
-func disabledButtonPatch(content string) (string, error) {
-	partial := map[string]interface{}{
-		"disabled": true,
-		"text": map[string]interface{}{
-			"tag":     "plain_text",
-			"content": content,
-		},
-	}
-	b, err := json.Marshal(partial)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
 func sendTextMsg(ctx context.Context, cfg *config.Config, chatID, receiveIDType, text, messageID string) error {
 	escaped, _ := json.Marshal(text)
 	card := fmt.Sprintf(`{"schema":"2.0","config":{"update_multi":true},"body":{"elements":[{"tag":"markdown","element_id":"msg","content":%s}]}}`, escaped)

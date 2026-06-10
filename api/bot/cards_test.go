@@ -1,4 +1,4 @@
-package api
+package bot
 
 import (
 	"encoding/json"
@@ -8,13 +8,13 @@ import (
 )
 
 func TestBuildPrintConfigCardDataDisablesActionButtons(t *testing.T) {
-	card := buildPrintConfigCardData(
+	card := BuildPrintConfigCardData(
 		"report.pdf",
 		3,
 		config.PrinterConfig{ID: "printer-a", Visible: true, DuplexMode: "manual"},
 		config.FileTypeDefault{Copies: 1, Nup: 1, Duplex: "off"},
 		"session-1",
-		printConfigCardState{Disabled: true, PrintButtonText: "处理中..."},
+		PrintConfigCardState{Disabled: true, PrintButtonText: "处理中..."},
 	)
 
 	printButton := findCardElement(t, card, "print_btn")
@@ -34,12 +34,12 @@ func TestBuildPrintConfigCardDataDisablesActionButtons(t *testing.T) {
 }
 
 func TestBuildPrinterSelectCardDataOnlyShowsPrinterPicker(t *testing.T) {
-	card := buildPrinterSelectCardData(
+	card := BuildPrinterSelectCardData(
 		"report.pdf",
 		3,
-		[]printerOption{{ID: "printer-a", Name: "Printer A", Value: "printer-a"}},
+		[]PrinterOption{{ID: "printer-a", Name: "Printer A", Value: "printer-a"}},
 		"session-1",
-		printerSelectCardState{},
+		PrinterSelectCardState{},
 	)
 
 	_ = findCardElement(t, card, "printer_select")
@@ -58,13 +58,13 @@ func TestBuildPrinterSelectCardDataOnlyShowsPrinterPicker(t *testing.T) {
 }
 
 func TestBuildPrintConfigCardDataFiltersDuplexByPrinter(t *testing.T) {
-	card := buildPrintConfigCardData(
+	card := BuildPrintConfigCardData(
 		"report.pdf",
 		3,
 		config.PrinterConfig{ID: "sast-printer", Visible: true, DuplexMode: "manual"},
 		config.FileTypeDefault{Copies: 1, Nup: 1, Duplex: "auto"},
 		"session-1",
-		printConfigCardState{},
+		PrintConfigCardState{},
 	)
 
 	duplexSelect := findCardElement(t, card, "duplex_select")
@@ -84,13 +84,13 @@ func TestBuildPrintConfigCardDataFiltersDuplexByPrinter(t *testing.T) {
 }
 
 func TestBuildPrintConfigCardDataIncludesScaleInput(t *testing.T) {
-	card := buildPrintConfigCardData(
+	card := BuildPrintConfigCardData(
 		"report.pdf",
 		3,
 		config.PrinterConfig{ID: "sast-printer", Visible: true, DuplexMode: "off"},
 		config.FileTypeDefault{Copies: 1, Nup: 1, Scale: 90, Duplex: "off"},
 		"session-1",
-		printConfigCardState{},
+		PrintConfigCardState{},
 	)
 
 	scaleInput := findCardElement(t, card, "scale_input")
@@ -100,7 +100,7 @@ func TestBuildPrintConfigCardDataIncludesScaleInput(t *testing.T) {
 }
 
 func TestBuildDuplexContinueCardDataDisablesActionButtons(t *testing.T) {
-	card := buildDuplexContinueCardData("token-1", duplexContinueCardState{Disabled: true})
+	card := BuildDuplexContinueCardData("token-1", DuplexContinueCardState{Disabled: true})
 
 	assertCardUpdateMulti(t, card)
 	continueButton := findCardElement(t, card, "continue_duplex_btn")
@@ -117,8 +117,42 @@ func TestBuildDuplexContinueCardDataDisablesActionButtons(t *testing.T) {
 	}
 }
 
+func TestBuildPrintConflictCardDataPreservesPrintParams(t *testing.T) {
+	card := BuildPrintConflictCardData("session-1", PrintConflictCardState{
+		Warning: &ActiveJobWarning{
+			Message:  "Alice正在打印。请去对应打印机出纸口观察是否有未打印完成的页面并提醒对方及时拿取文件。这也可能是误判。",
+			FileName: "report.pdf",
+		},
+		PrinterID: "printer-a",
+		Copies:    3,
+		Pages:     "1-2",
+		Nup:       2,
+		Scale:     "90",
+		Duplex:    "manual",
+	})
+
+	assertCardUpdateMulti(t, card)
+	continueButton := findCardElement(t, card, "confirm_print_btn")
+	behaviorValue := firstButtonBehaviorValue(t, continueButton)
+	for key, want := range map[string]string{
+		"action":     "confirm_print",
+		"session_id": "session-1",
+		"printer_id": "printer-a",
+		"copies":     "3",
+		"pages":      "1-2",
+		"nup":        "2",
+		"scale":      "90",
+		"duplex":     "manual",
+		"confirmed":  "true",
+	} {
+		if got, ok := behaviorValue[key].(string); !ok || got != want {
+			t.Fatalf("confirm behavior %s = %v, want %s", key, behaviorValue[key], want)
+		}
+	}
+}
+
 func TestBuildJobSubmittedCardUsesJSON2BodyElements(t *testing.T) {
-	cardJSON, err := buildJobSubmittedCard("job-1", "printer-a", "report.pdf", 2, "单面")
+	cardJSON, err := BuildJobSubmittedCard("job-1", "printer-a", "report.pdf", 2, "单面")
 	if err != nil {
 		t.Fatalf("build submitted card: %v", err)
 	}
@@ -138,7 +172,7 @@ func TestBuildJobSubmittedCardUsesJSON2BodyElements(t *testing.T) {
 }
 
 func TestDisabledButtonPatchOnlyPatchesMutableFields(t *testing.T) {
-	patch, err := disabledButtonPatch("处理中...")
+	patch, err := DisabledButtonPatch("处理中...")
 	if err != nil {
 		t.Fatalf("disabled button patch: %v", err)
 	}
@@ -213,4 +247,21 @@ func findCardElementValue(node interface{}, elementID string) map[string]interfa
 		}
 	}
 	return nil
+}
+
+func firstButtonBehaviorValue(t *testing.T, button map[string]interface{}) map[string]interface{} {
+	t.Helper()
+	behaviors, ok := button["behaviors"].([]interface{})
+	if !ok || len(behaviors) == 0 {
+		t.Fatalf("button behaviors = %T %v, want non-empty []interface{}", button["behaviors"], button["behaviors"])
+	}
+	behavior, ok := behaviors[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("behavior type = %T, want map[string]interface{}", behaviors[0])
+	}
+	value, ok := behavior["value"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("behavior value type = %T, want map[string]interface{}", behavior["value"])
+	}
+	return value
 }

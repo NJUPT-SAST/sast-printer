@@ -1,50 +1,73 @@
-package api
+package bot
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
+	"goprint/api/pdfutil"
 	"goprint/config"
-	"log"
 	"strconv"
 	"strings"
 )
 
-type printerOption struct {
+type PrinterOption struct {
 	ID    string `json:"id"`
 	Name  string `json:"text"`
 	Value string `json:"value"`
 }
 
-type printerSelectCardState struct {
+type PrinterSelectCardState struct {
 	Disabled          bool
 	NextButtonText    string
 	CancelButtonText  string
 	SelectedPrinterID string
 	StatusText        string
+	TimeoutMinutes    int
 }
 
-type printConfigCardState struct {
+type PrintConfigCardState struct {
 	Disabled         bool
 	PrintButtonText  string
 	CancelButtonText string
 	PagesValue       string
 	ScaleValue       string
 	StatusText       string
+	TimeoutMinutes   int
 }
 
-type duplexContinueCardState struct {
+type DuplexContinueCardState struct {
 	Disabled     bool
 	ContinueText string
 	CancelText   string
 	StatusText   string
 }
 
-func buildPrinterOptions(cfg *config.Config) []printerOption {
+type ActiveJobWarning struct {
+	Message       string
+	FileName      string
+	HookExpiresAt string
+}
+
+type PrintConflictCardState struct {
+	Disabled       bool
+	ContinueText   string
+	CancelText     string
+	StatusText     string
+	Warning        *ActiveJobWarning
+	PrinterID      string
+	Copies         int
+	Pages          string
+	Nup            int
+	Scale          string
+	Duplex         string
+	OriginalAction string
+	CancelStage    string
+}
+
+func BuildPrinterOptions(cfg *config.Config) []PrinterOption {
 	visible := cfg.VisiblePrinters()
-	opts := make([]printerOption, len(visible))
+	opts := make([]PrinterOption, len(visible))
 	for i, p := range visible {
-		opts[i] = printerOption{ID: p.ID, Name: p.ID, Value: p.ID}
+		opts[i] = PrinterOption{ID: p.ID, Name: p.ID, Value: p.ID}
 	}
 	return opts
 }
@@ -70,7 +93,14 @@ func botCardConfig() map[string]interface{} {
 	}
 }
 
-func buildPrinterSelectCardData(filename string, totalPages int, printers []printerOption, sessionID string, state printerSelectCardState) map[string]interface{} {
+func displayTimeoutMinutes(minutes int) int {
+	if minutes <= 0 {
+		return 10
+	}
+	return minutes
+}
+
+func BuildPrinterSelectCardData(filename string, totalPages int, printers []PrinterOption, sessionID string, state PrinterSelectCardState) map[string]interface{} {
 	mkOptText := func(s string) map[string]interface{} {
 		return map[string]interface{}{"tag": "plain_text", "content": s}
 	}
@@ -181,7 +211,7 @@ func buildPrinterSelectCardData(filename string, totalPages int, printers []prin
 		map[string]interface{}{
 			"tag":        "markdown",
 			"element_id": "timeout_hint",
-			"content":    fmt.Sprintf("⏰ %d 分钟后自动取消任务", int(botCardTTL().Minutes())),
+			"content":    fmt.Sprintf("⏰ %d 分钟后自动取消任务", displayTimeoutMinutes(state.TimeoutMinutes)),
 		},
 	)
 
@@ -201,8 +231,8 @@ func buildPrinterSelectCardData(filename string, totalPages int, printers []prin
 	}
 }
 
-func buildPrinterSelectCard(filename string, totalPages int, printers []printerOption, sessionID string) (string, error) {
-	b, err := json.Marshal(buildPrinterSelectCardData(filename, totalPages, printers, sessionID, printerSelectCardState{}))
+func BuildPrinterSelectCard(filename string, totalPages int, printers []PrinterOption, sessionID string) (string, error) {
+	b, err := json.Marshal(BuildPrinterSelectCardData(filename, totalPages, printers, sessionID, PrinterSelectCardState{}))
 	return string(b), err
 }
 
@@ -234,7 +264,7 @@ func buildDuplexOptions(printer config.PrinterConfig) []map[string]interface{} {
 	return options
 }
 
-func isPrinterDuplexOptionSupported(printer config.PrinterConfig, duplex string) bool {
+func IsPrinterDuplexOptionSupported(printer config.PrinterConfig, duplex string) bool {
 	switch strings.TrimSpace(strings.ToLower(duplex)) {
 	case "", "off":
 		return true
@@ -251,19 +281,19 @@ func normalizeDefaultsForPrinter(defaults config.FileTypeDefault, printer config
 	if defaults.Copies < 1 {
 		defaults.Copies = 1
 	}
-	if !validNup(defaults.Nup) {
+	if !pdfutil.ValidNup(defaults.Nup) {
 		defaults.Nup = 1
 	}
 	if defaults.Scale <= 0 {
 		defaults.Scale = 100
 	}
-	if !isPrinterDuplexOptionSupported(printer, defaults.Duplex) {
+	if !IsPrinterDuplexOptionSupported(printer, defaults.Duplex) {
 		defaults.Duplex = "off"
 	}
 	return defaults
 }
 
-func buildPrintConfigCardData(filename string, totalPages int, printer config.PrinterConfig, defaults config.FileTypeDefault, sessionID string, state printConfigCardState) map[string]interface{} {
+func BuildPrintConfigCardData(filename string, totalPages int, printer config.PrinterConfig, defaults config.FileTypeDefault, sessionID string, state PrintConfigCardState) map[string]interface{} {
 	nupOptions := buildNupOptions()
 	duplexOptions := buildDuplexOptions(printer)
 
@@ -423,7 +453,7 @@ func buildPrintConfigCardData(filename string, totalPages int, printer config.Pr
 		map[string]interface{}{
 			"tag":        "markdown",
 			"element_id": "timeout_hint",
-			"content":    fmt.Sprintf("⏰ %d 分钟后自动取消任务", int(botCardTTL().Minutes())),
+			"content":    fmt.Sprintf("⏰ %d 分钟后自动取消任务", displayTimeoutMinutes(state.TimeoutMinutes)),
 		},
 	)
 
@@ -443,48 +473,12 @@ func buildPrintConfigCardData(filename string, totalPages int, printer config.Pr
 	}
 }
 
-func buildPrintConfigCard(filename string, totalPages int, printer config.PrinterConfig, defaults config.FileTypeDefault, sessionID string) (string, error) {
-	b, err := json.Marshal(buildPrintConfigCardData(filename, totalPages, printer, defaults, sessionID, printConfigCardState{}))
+func BuildPrintConfigCard(filename string, totalPages int, printer config.PrinterConfig, defaults config.FileTypeDefault, sessionID string) (string, error) {
+	b, err := json.Marshal(BuildPrintConfigCardData(filename, totalPages, printer, defaults, sessionID, PrintConfigCardState{}))
 	return string(b), err
 }
 
-func resendPrintConfigCard(cfg *config.Config, session botCardSession, sessionID, chatID, idType string) {
-	pages := session.TotalPages
-	if pages <= 0 {
-		var err error
-		pages, err = countPDFPages(session.SourcePath)
-		if err != nil {
-			log.Printf("[bot] recount pages for resend: %v", err)
-			return
-		}
-	}
-
-	printerID := session.PrinterID
-	printer, err := resolveVisibleBotPrinter(cfg, printerID)
-	if err != nil {
-		visible := cfg.VisiblePrinters()
-		if len(visible) == 0 {
-			log.Printf("[bot] no visible printer for resend session=%s", sessionID)
-			return
-		}
-		printer = visible[0]
-	}
-
-	defaults := cfg.ResolveFileTypeDefault(session.Filename)
-	if session.IsCloudDoc {
-		defaults = cfg.CloudDocDefault()
-	}
-	card, err := buildPrintConfigCard(session.Filename, pages, printer, defaults, sessionID)
-	if err != nil {
-		log.Printf("[bot] rebuild card for resend: %v", err)
-		return
-	}
-	if _, err := sendBotCard(context.Background(), cfg, chatID, session.ChatType, session.RequesterOpenID, card, session.ReplyMessageID); err != nil {
-		log.Printf("[bot] resend card failed: %v", err)
-	}
-}
-
-func isValidPages(s string) bool {
+func IsValidPages(s string) bool {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return true
@@ -510,7 +504,7 @@ func isValidPages(s string) bool {
 	return true
 }
 
-func buildJobSubmittedCard(jobID, printerID, filename string, copies int, duplex string) (string, error) {
+func BuildJobSubmittedCard(jobID, printerID, filename string, copies int, duplex string) (string, error) {
 	card := map[string]interface{}{
 		"schema": "2.0",
 		"config": botCardConfig(),
@@ -547,7 +541,143 @@ func buildJobSubmittedCard(jobID, printerID, filename string, copies int, duplex
 	return string(b), nil
 }
 
-func buildDuplexContinueCardData(token string, state duplexContinueCardState) map[string]interface{} {
+func BuildPrintConflictCardData(sessionID string, state PrintConflictCardState) map[string]interface{} {
+	continueText := state.ContinueText
+	if continueText == "" {
+		continueText = "仍然打印"
+	}
+	cancelText := state.CancelText
+	if cancelText == "" {
+		cancelText = "取消"
+	}
+	if state.Nup <= 0 {
+		state.Nup = 1
+	}
+	if state.Copies <= 0 {
+		state.Copies = 1
+	}
+	if strings.TrimSpace(state.Scale) == "" {
+		state.Scale = "100"
+	}
+	if strings.TrimSpace(state.Duplex) == "" {
+		state.Duplex = "off"
+	}
+	if strings.TrimSpace(state.OriginalAction) == "" {
+		state.OriginalAction = "print"
+	}
+	if strings.TrimSpace(state.CancelStage) == "" {
+		state.CancelStage = "print_details"
+	}
+
+	continueButton := map[string]interface{}{
+		"tag":        "button",
+		"element_id": "confirm_print_btn",
+		"text":       map[string]interface{}{"tag": "plain_text", "content": continueText},
+		"type":       "primary_filled",
+		"name":       "confirm_print_btn",
+	}
+	cancelButton := map[string]interface{}{
+		"tag":        "button",
+		"element_id": "cancel_btn",
+		"text":       map[string]interface{}{"tag": "plain_text", "content": cancelText},
+		"type":       "default",
+		"name":       "cancel_btn",
+	}
+	if state.Disabled {
+		continueButton["disabled"] = true
+		cancelButton["disabled"] = true
+	} else {
+		continueButton["behaviors"] = []interface{}{
+			map[string]interface{}{"type": "callback", "value": map[string]interface{}{
+				"action":          "confirm_print",
+				"session_id":      sessionID,
+				"printer_id":      state.PrinterID,
+				"copies":          strconv.Itoa(state.Copies),
+				"pages":           state.Pages,
+				"nup":             strconv.Itoa(state.Nup),
+				"scale":           state.Scale,
+				"duplex":          state.Duplex,
+				"original_action": state.OriginalAction,
+				"confirmed":       "true",
+			}},
+		}
+		cancelButton["behaviors"] = []interface{}{
+			map[string]interface{}{"type": "callback", "value": map[string]interface{}{"action": "cancel", "stage": state.CancelStage, "session_id": sessionID, "printer_id": state.PrinterID}},
+		}
+		cancelButton["confirm"] = map[string]interface{}{
+			"title": map[string]interface{}{"tag": "plain_text", "content": "取消打印？"},
+			"text":  map[string]interface{}{"tag": "plain_text", "content": "将取消本次打印配置"},
+		}
+	}
+
+	message := "有人正在使用这台打印机。请去对应打印机出纸口观察是否有未打印完成的页面并提醒对方及时拿取文件。这也可能是误判。"
+	if state.Warning != nil && strings.TrimSpace(state.Warning.Message) != "" {
+		message = state.Warning.Message
+	}
+	if state.Warning != nil && state.Warning.FileName != "" {
+		message += fmt.Sprintf("\n\n相关文件：%s", state.Warning.FileName)
+	}
+	if state.Warning != nil && state.Warning.HookExpiresAt != "" {
+		message += fmt.Sprintf("\n等待截止：%s", state.Warning.HookExpiresAt)
+	}
+
+	bodyElements := []interface{}{
+		map[string]interface{}{
+			"tag":        "markdown",
+			"element_id": "printer_conflict_warning",
+			"content":    message,
+		},
+		map[string]interface{}{
+			"tag":                "column_set",
+			"element_id":         "confirm_print_cols",
+			"flex_mode":          "bisect",
+			"horizontal_spacing": "8px",
+			"horizontal_align":   "right",
+			"columns": []interface{}{
+				map[string]interface{}{
+					"tag":      "column",
+					"width":    "auto",
+					"elements": []interface{}{cancelButton},
+				},
+				map[string]interface{}{
+					"tag":      "column",
+					"width":    "auto",
+					"elements": []interface{}{continueButton},
+				},
+			},
+		},
+	}
+	if strings.TrimSpace(state.StatusText) != "" {
+		bodyElements = append(bodyElements, map[string]interface{}{
+			"tag":        "markdown",
+			"element_id": "conflict_status",
+			"content":    state.StatusText,
+		})
+	}
+
+	return map[string]interface{}{
+		"schema": "2.0",
+		"config": botCardConfig(),
+		"header": map[string]interface{}{
+			"template": "orange",
+			"title": map[string]interface{}{
+				"tag":     "plain_text",
+				"content": "打印机可能正在使用",
+			},
+		},
+		"body": map[string]interface{}{
+			"elements": bodyElements,
+		},
+	}
+}
+
+func BuildPrintConflictCard(sessionID string, state PrintConflictCardState) (string, error) {
+	card := BuildPrintConflictCardData(sessionID, state)
+	b, _ := json.Marshal(card)
+	return string(b), nil
+}
+
+func BuildDuplexContinueCardData(token string, state DuplexContinueCardState) map[string]interface{} {
 	continueText := state.ContinueText
 	if continueText == "" {
 		continueText = "已翻面，继续打印"
@@ -631,8 +761,23 @@ func buildDuplexContinueCardData(token string, state duplexContinueCardState) ma
 	}
 }
 
-func buildDuplexContinueCard(token string) (string, error) {
-	card := buildDuplexContinueCardData(token, duplexContinueCardState{})
+func BuildDuplexContinueCard(token string) (string, error) {
+	card := BuildDuplexContinueCardData(token, DuplexContinueCardState{})
 	b, _ := json.Marshal(card)
+	return string(b), nil
+}
+
+func DisabledButtonPatch(content string) (string, error) {
+	partial := map[string]interface{}{
+		"disabled": true,
+		"text": map[string]interface{}{
+			"tag":     "plain_text",
+			"content": content,
+		},
+	}
+	b, err := json.Marshal(partial)
+	if err != nil {
+		return "", err
+	}
 	return string(b), nil
 }
