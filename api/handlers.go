@@ -951,28 +951,31 @@ func PreviewConvertedDocument(c *gin.Context) {
 
 func ContinueManualDuplexPrint(c *gin.Context) {
 	token := c.Param("token")
-	pending, ok := getManualDuplexPending(token)
+	pending, ok := claimManualDuplexPending(token)
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{
-			"error": "manual duplex hook not found or already used",
+			"error": "manual duplex hook not found, already used, or already processing",
 		})
 		return
 	}
 
 	printerCfg, err := resolvePrinter(pending.PrinterID)
 	if err != nil {
+		releaseManualDuplexPending(token)
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "printer_id": pending.PrinterID})
 		return
 	}
 
 	cupsClient, printerName, err := newCupsClientForPrinter(printerCfg)
 	if err != nil {
+		releaseManualDuplexPending(token)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "printer_id": pending.PrinterID})
 		return
 	}
 
 	jobID, err := cupsClient.SubmitJob(printerName, pending.RemainingFilePath, cups.PrintOptions{Copies: pending.Copies})
 	if err != nil {
+		releaseManualDuplexPending(token)
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error":   "failed to submit remaining pages",
 			"details": err.Error(),
@@ -993,51 +996,39 @@ func ContinueManualDuplexPrint(c *gin.Context) {
 
 	cfg, cfgErr := requireConfig()
 	if cfgErr == nil {
-		if store, storeErr := newBitableJobStore(cfg); storeErr == nil {
-			if err := store.UpdateManualDuplexContinued(context.Background(), pending.JobID, jobID); err != nil {
-				log.Printf("[manual-duplex] failed to update continued job in bitable initial_job_id=%s continued_job_id=%s err=%v", pending.JobID, jobID, err)
+		go func() {
+			if store, storeErr := newBitableJobStore(cfg); storeErr == nil {
+				if err := store.UpdateManualDuplexContinued(context.Background(), pending.JobID, jobID); err != nil {
+					log.Printf("[manual-duplex] failed to update continued job in bitable initial_job_id=%s continued_job_id=%s err=%v", pending.JobID, jobID, err)
+				}
+			} else {
+				log.Printf("[manual-duplex] bitable store init failed while continuing initial_job_id=%s continued_job_id=%s err=%v", pending.JobID, jobID, storeErr)
 			}
-		} else {
-			log.Printf("[manual-duplex] bitable store init failed while continuing initial_job_id=%s continued_job_id=%s err=%v", pending.JobID, jobID, storeErr)
-		}
 
-		// 将第二遍任务也注册到后台轮询器
-		tracker := initJobStatusPoller(cfg)
-		if tracker != nil {
-			tracker.AddPendingJob(jobID, pending.PrinterID)
-		}
+			// 将第二遍任务也注册到后台轮询器
+			tracker := initJobStatusPoller(cfg)
+			if tracker != nil {
+				tracker.AddPendingJob(jobID, pending.PrinterID)
+			}
+		}()
 	}
 }
 
 func CancelManualDuplexPrint(c *gin.Context) {
 	token := c.Param("token")
-	pending, ok := getManualDuplexPending(token)
+	pending, ok := claimManualDuplexPending(token)
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{
-			"error": "manual duplex hook not found or already used",
+			"error": "manual duplex hook not found, already used, or already processing",
 		})
 		return
 	}
 
 	cfg, err := requireConfig()
 	if err != nil {
+		releaseManualDuplexPending(token)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
-	}
-
-	store, err := newBitableJobStore(cfg)
-	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error":   "job store is not available",
-			"details": err.Error(),
-		})
-		return
-	}
-
-	if pending.JobID != "" {
-		if err := store.UpdateJobStatus(context.Background(), pending.JobID, "cancelled"); err != nil {
-			log.Printf("[manual-duplex] failed to mark job cancelled in bitable job_id=%s err=%v", pending.JobID, err)
-		}
 	}
 
 	if tracker := initJobStatusPoller(cfg); tracker != nil && pending.JobID != "" {
@@ -1054,6 +1045,19 @@ func CancelManualDuplexPrint(c *gin.Context) {
 		"message":   "Manual duplex flow cancelled; remaining pages were not submitted",
 		"cancelled": true,
 	})
+
+	go func() {
+		store, err := newBitableJobStore(cfg)
+		if err != nil {
+			log.Printf("[manual-duplex] skip bitable cancel update job_id=%s err=%v", pending.JobID, err)
+			return
+		}
+		if pending.JobID != "" {
+			if err := store.UpdateJobStatus(context.Background(), pending.JobID, "cancelled"); err != nil {
+				log.Printf("[manual-duplex] failed to mark job cancelled in bitable job_id=%s err=%v", pending.JobID, err)
+			}
+		}
+	}()
 }
 
 // ListPrintJobs 列出所有打印任务
