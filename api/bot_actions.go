@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"goprint/api/conversion"
 	"goprint/config"
 	"goprint/cups"
 	"log"
@@ -56,7 +57,7 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 
 	switch msgType {
 	case "file":
-		if !isSupportedUploadFile(cfg, content.FileName) {
+		if !conversion.IsSupportedUploadFile(cfg, content.FileName) {
 			_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, "不支持的文件类型，请发送 PDF、Office 文档（doc/docx/ppt/pptx）或图片（jpg/png）", messageID)
 			return
 		}
@@ -69,8 +70,8 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 		sourcePath, filename, cleanup = path, fn, cl
 
 		// Convert office docs and images to PDF (same pipeline as web flow)
-		if isOfficeConvertible(cfg, filename) {
-			pdfPath, convErr := convertOfficeToPDF(context.Background(), cfg, sourcePath)
+		if conversion.IsOfficeConvertible(cfg, filename) {
+			pdfPath, convErr := conversion.ConvertOfficeToPDF(context.Background(), cfg, sourcePath)
 			if convErr != nil {
 				log.Printf("[bot] office convert failed: %v", convErr)
 				_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, "文档转换失败，请确保文件格式正确", messageID)
@@ -80,8 +81,8 @@ func processMessageEvent(cfg *config.Config, event *larkim.P2MessageReceiveV1) {
 			oldCleanup := cleanup
 			sourcePath = pdfPath
 			cleanup = func() { _ = os.Remove(pdfPath); oldCleanup() }
-		} else if isImageConvertible(filename) {
-			pdfPath, convErr := convertImageToPDF(cfg, sourcePath)
+		} else if conversion.IsImageConvertible(filename) {
+			pdfPath, convErr := conversion.ConvertImageToPDF(cfg, sourcePath)
 			if convErr != nil {
 				log.Printf("[bot] image convert failed: %v", convErr)
 				_ = sendBotText(context.Background(), cfg, chatID, chatType, requesterOpenID, "图片转换失败", messageID)

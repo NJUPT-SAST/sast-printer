@@ -1,4 +1,4 @@
-package api
+package conversion
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	_ "image/png"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,7 +26,7 @@ var supportedImageExt = map[string]bool{
 	".png":  true,
 }
 
-func fileExtLower(name string) string {
+func FileExtLower(name string) string {
 	return strings.ToLower(filepath.Ext(strings.TrimSpace(name)))
 }
 
@@ -43,8 +44,8 @@ func acceptedOfficeExtMap(cfg *config.Config) map[string]bool {
 	return out
 }
 
-func isSupportedUploadFile(cfg *config.Config, name string) bool {
-	ext := fileExtLower(name)
+func IsSupportedUploadFile(cfg *config.Config, name string) bool {
+	ext := FileExtLower(name)
 	if ext == ".pdf" {
 		return true
 	}
@@ -54,16 +55,50 @@ func isSupportedUploadFile(cfg *config.Config, name string) bool {
 	return supportedImageExt[ext]
 }
 
-func isOfficeConvertible(cfg *config.Config, name string) bool {
-	ext := fileExtLower(name)
+func IsOfficeConvertible(cfg *config.Config, name string) bool {
+	ext := FileExtLower(name)
 	if ext == ".pdf" {
 		return false
 	}
 	return acceptedOfficeExtMap(cfg)[ext]
 }
 
-func isImageConvertible(name string) bool {
-	return supportedImageExt[fileExtLower(name)]
+func IsImageConvertible(name string) bool {
+	return supportedImageExt[FileExtLower(name)]
+}
+
+func SupportedUploadExtensions(cfg *config.Config) []string {
+	seen := map[string]struct{}{"pdf": {}}
+	fileTypes := []string{"pdf"}
+
+	for ext := range acceptedOfficeExtMap(cfg) {
+		normalized := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(ext)), ".")
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		fileTypes = append(fileTypes, normalized)
+	}
+
+	for ext := range supportedImageExt {
+		normalized := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(ext)), ".")
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		fileTypes = append(fileTypes, normalized)
+	}
+
+	if len(fileTypes) > 1 {
+		sort.Strings(fileTypes[1:])
+	}
+	return fileTypes
 }
 
 func pathIsUnderDir(path string, dir string) bool {
@@ -79,7 +114,7 @@ func pathIsUnderDir(path string, dir string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }
 
-func convertImageToPDF(cfg *config.Config, sourcePath string) (string, error) {
+func ConvertImageToPDF(cfg *config.Config, sourcePath string) (string, error) {
 	if err := os.MkdirAll(cfg.OfficeConversion.OutputDir, 0o755); err != nil {
 		return "", fmt.Errorf("failed to create conversion output dir: %w", err)
 	}
@@ -129,7 +164,7 @@ func convertImageToPDF(cfg *config.Config, sourcePath string) (string, error) {
 	x := (pageW - drawW) / 2
 	y := (pageH - drawH) / 2
 
-	imgType := strings.TrimPrefix(fileExtLower(sourcePath), ".")
+	imgType := strings.TrimPrefix(FileExtLower(sourcePath), ".")
 	if imgType == "jpg" {
 		imgType = "jpeg"
 	}
@@ -152,7 +187,7 @@ func convertImageToPDF(cfg *config.Config, sourcePath string) (string, error) {
 	return outPath, nil
 }
 
-func convertOfficeToPDF(ctx context.Context, cfg *config.Config, sourcePath string) (string, error) {
+func ConvertOfficeToPDF(ctx context.Context, cfg *config.Config, sourcePath string) (string, error) {
 	if !cfg.OfficeConversion.Enabled {
 		return "", fmt.Errorf("office conversion is disabled")
 	}
