@@ -13,17 +13,18 @@ import (
 )
 
 const (
-	bitableFieldID          = "id"
-	bitableFieldJobID       = "job_id"
-	bitableFieldPrinterID   = "printer_id"
-	bitableFieldFileName    = "file_name"
-	bitableFieldStatus      = "status"
-	bitableFieldCopies      = "copies"
-	bitableFieldPageCount   = "page_count"
-	bitableFieldDuplex      = "duplex"
-	bitableFieldDuplexHook  = "duplex_hook"
-	bitableFieldUser        = "user"
-	bitableFieldSubmittedAt = "submitted_at"
+	bitableFieldID             = "id"
+	bitableFieldJobID          = "job_id"
+	bitableFieldPrinterID      = "printer_id"
+	bitableFieldFileName       = "file_name"
+	bitableFieldStatus         = "status"
+	bitableFieldCopies         = "copies"
+	bitableFieldPageCount      = "page_count"
+	bitableFieldDuplex         = "duplex"
+	bitableFieldDuplexHook     = "duplex_hook"
+	bitableFieldDuplexExpireAt = "duplex_expire_at"
+	bitableFieldUser           = "user"
+	bitableFieldSubmittedAt    = "submitted_at"
 )
 
 type bitableJobStore struct {
@@ -34,15 +35,16 @@ type bitableJobStore struct {
 }
 
 type printJobRecord struct {
-	JobID      string
-	PrinterID  string
-	FileName   string
-	Status     string
-	Copies     int
-	PageCount  int
-	Duplex     bool
-	DuplexHook string
-	User       feishuUserInfo
+	JobID          string
+	PrinterID      string
+	FileName       string
+	Status         string
+	Copies         int
+	PageCount      int
+	Duplex         bool
+	DuplexHook     string
+	DuplexExpireAt time.Time
+	User           feishuUserInfo
 }
 
 type trackableJob struct {
@@ -115,6 +117,9 @@ func (s *bitableJobStore) SaveJob(ctx context.Context, record printJobRecord) er
 
 	if v := strings.TrimSpace(record.DuplexHook); v != "" {
 		fields[bitableFieldDuplexHook] = v
+	}
+	if !record.DuplexExpireAt.IsZero() {
+		fields[bitableFieldDuplexExpireAt] = bitableDateTimeValue(record.DuplexExpireAt)
 	}
 
 	openID := strings.TrimSpace(record.User.OpenID)
@@ -479,6 +484,10 @@ func calcDuplexHookExpiresAt(fields map[string]interface{}) (time.Time, bool) {
 		return time.Time{}, false
 	}
 
+	if expiresAt, ok := fieldAsTime(fields[bitableFieldDuplexExpireAt]); ok {
+		return expiresAt, true
+	}
+
 	if token := manualDuplexTokenFromHook(fieldAsString(fields[bitableFieldDuplexHook])); token != "" {
 		if pending, ok := manualDuplexPendingByToken(token); ok {
 			return pending.ExpiresAt, true
@@ -497,6 +506,10 @@ func calcDuplexHookExpiresAt(fields map[string]interface{}) (time.Time, bool) {
 		pageCount *= copies
 	}
 	return submittedAt.Add(manualDuplexTimeoutForPrinterID(printerID, pageCount)), true
+}
+
+func bitableDateTimeValue(t time.Time) int64 {
+	return t.UnixMilli()
 }
 
 func manualDuplexTokenFromHook(hook string) string {
@@ -751,6 +764,19 @@ func (s *bitableJobStore) UpdateManualDuplexContinued(ctx context.Context, initi
 		bitableFieldJobID:      continuedJobID,
 		bitableFieldStatus:     "pending",
 		bitableFieldDuplexHook: "",
+	})
+}
+
+func (s *bitableJobStore) UpdateManualDuplexExpireAt(ctx context.Context, jobID string, expiresAt time.Time) error {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	if expiresAt.IsZero() {
+		return fmt.Errorf("duplex expire_at is required")
+	}
+
+	return s.updateJobFields(ctx, jobID, map[string]interface{}{
+		bitableFieldDuplexExpireAt: bitableDateTimeValue(expiresAt),
 	})
 }
 

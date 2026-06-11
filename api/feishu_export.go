@@ -731,15 +731,16 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 
 		if user, ok := currentAuthUser(c); ok {
 			persistPrintJobToBitable(c, cfg, printJobRecord{
-				JobID:      initialJobID,
-				PrinterID:  printerID,
-				FileName:   filename,
-				Status:     "pending_manual_continue",
-				Copies:     copies,
-				PageCount:  printPageCount,
-				Duplex:     true,
-				DuplexHook: hookURL,
-				User:       user,
+				JobID:          initialJobID,
+				PrinterID:      printerID,
+				FileName:       filename,
+				Status:         "pending_manual_continue",
+				Copies:         copies,
+				PageCount:      printPageCount,
+				Duplex:         true,
+				DuplexHook:     hookURL,
+				DuplexExpireAt: expiresAt,
+				User:           user,
 			})
 
 			tracker := initJobStatusPoller(cfg)

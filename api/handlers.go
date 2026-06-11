@@ -49,6 +49,24 @@ func persistPrintJobToBitable(c *gin.Context, cfg *config.Config, record printJo
 	}
 }
 
+func syncManualDuplexExpireAtToBitable(jobID string, expiresAt time.Time) {
+	cfg, err := requireConfig()
+	if err != nil {
+		log.Printf("[manual-duplex] skip bitable expire sync job_id=%s err=%v", jobID, err)
+		return
+	}
+
+	store, err := newBitableJobStore(cfg)
+	if err != nil {
+		log.Printf("[manual-duplex] skip bitable expire sync job_id=%s err=%v", jobID, err)
+		return
+	}
+
+	if err := store.UpdateManualDuplexExpireAt(context.Background(), jobID, expiresAt); err != nil {
+		log.Printf("[manual-duplex] failed to sync bitable expire_at job_id=%s expire_at=%s err=%v", jobID, expiresAt.Format(time.RFC3339), err)
+	}
+}
+
 // HealthCheck 健康检查接口
 func HealthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
@@ -760,15 +778,16 @@ func SubmitPrintJob(c *gin.Context) {
 			cfg, cfgErr := requireConfig()
 			if cfgErr == nil {
 				persistPrintJobToBitable(c, cfg, printJobRecord{
-					JobID:      initialJobID,
-					PrinterID:  printerID,
-					FileName:   file.Filename,
-					Status:     "pending_manual_continue",
-					Copies:     copies,
-					PageCount:  printPageCount,
-					Duplex:     true,
-					DuplexHook: hookURL,
-					User:       user,
+					JobID:          initialJobID,
+					PrinterID:      printerID,
+					FileName:       file.Filename,
+					Status:         "pending_manual_continue",
+					Copies:         copies,
+					PageCount:      printPageCount,
+					Duplex:         true,
+					DuplexHook:     hookURL,
+					DuplexExpireAt: expiresAt,
+					User:           user,
 				})
 
 				// 将任务注册到后台轮询器
@@ -1035,6 +1054,8 @@ func ExtendManualDuplexPrint(c *gin.Context) {
 		})
 		return
 	}
+
+	syncManualDuplexExpireAtToBitable(pending.JobID, pending.ExpiresAt)
 
 	c.JSON(http.StatusOK, gin.H{
 		"printer":                    pending.PrinterID,

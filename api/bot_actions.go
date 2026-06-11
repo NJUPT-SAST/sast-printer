@@ -783,7 +783,7 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 			return
 		}
 
-		token, _, err := saveManualDuplexPending(jobID, printerID, secondPassPath, 1, openID, printPageCount*copies)
+		token, expiresAt, err := saveManualDuplexPending(jobID, printerID, secondPassPath, 1, openID, printPageCount*copies)
 		if err != nil {
 			log.Printf("[bot] save duplex pending: %v", err)
 			_ = sendSessionText(context.Background(), cfg, session, "保存双面任务失败")
@@ -791,15 +791,16 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 		}
 
 		persistBotJobRecord(cfg, printJobRecord{
-			JobID:      jobID,
-			PrinterID:  printerID,
-			FileName:   session.Filename,
-			Status:     "pending_manual_continue",
-			Copies:     copies,
-			PageCount:  printPageCount,
-			Duplex:     true,
-			DuplexHook: "bot://manual-duplex/" + token,
-			User:       feishuUserInfo{OpenID: openID},
+			JobID:          jobID,
+			PrinterID:      printerID,
+			FileName:       session.Filename,
+			Status:         "pending_manual_continue",
+			Copies:         copies,
+			PageCount:      printPageCount,
+			Duplex:         true,
+			DuplexHook:     "bot://manual-duplex/" + token,
+			DuplexExpireAt: expiresAt,
+			User:           feishuUserInfo{OpenID: openID},
 		})
 
 		duplexCard, err := buildDuplexContinueCard(token)

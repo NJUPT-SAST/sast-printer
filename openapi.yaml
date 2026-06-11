@@ -1373,7 +1373,7 @@ components:
           example: "/manual-duplex-hooks/abc123def456/continue"
         hook_expires_at:
           type: string
-          description: hook 过期时间，格式为 yyyy-MM-dd HH:mm（submitted_at + 动态手动双面超时时间，仅 duplex_hook 存在时返回）
+          description: hook 过期时间，格式为 yyyy-MM-dd HH:mm（优先来自多维表 duplex_expire_at，老记录缺失时回退为 submitted_at + 动态手动双面超时时间；仅 duplex_hook 存在时返回）
           example: "2026-04-01 16:09"
         hook_extend_window_seconds:
           type: integer

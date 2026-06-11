@@ -91,3 +91,33 @@ func TestNewerActiveWarningUsesExpiresAtForManualDuplex(t *testing.T) {
 		t.Fatal("newerActiveWarning did not prefer later manual duplex expiry")
 	}
 }
+
+func TestCalcDuplexHookExpiresAtUsesDuplexExpireAt(t *testing.T) {
+	expiresAt := time.Date(2026, 6, 12, 11, 30, 0, 0, time.Local)
+	fields := map[string]interface{}{
+		bitableFieldDuplexExpireAt: bitableDateTimeValue(expiresAt),
+		bitableFieldSubmittedAt:    bitableDateTimeValue(time.Date(2026, 6, 12, 9, 0, 0, 0, time.Local)),
+		bitableFieldPrinterID:      "printer-1",
+		bitableFieldPageCount:      999,
+		bitableFieldCopies:         3,
+	}
+
+	got, ok := calcDuplexHookExpiresAt(fields)
+	if !ok {
+		t.Fatal("calcDuplexHookExpiresAt did not return an expiry")
+	}
+	if !got.Equal(expiresAt) {
+		t.Fatalf("calcDuplexHookExpiresAt = %s, want %s", got, expiresAt)
+	}
+}
+
+func TestBitableDateTimeValueRoundTripsThroughFieldAsTime(t *testing.T) {
+	want := time.Date(2026, 6, 12, 11, 30, 0, 0, time.Local)
+	got, ok := fieldAsTime(bitableDateTimeValue(want))
+	if !ok {
+		t.Fatal("fieldAsTime did not parse bitableDateTimeValue")
+	}
+	if !got.Equal(want) {
+		t.Fatalf("fieldAsTime(bitableDateTimeValue) = %s, want %s", got, want)
+	}
+}

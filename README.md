@@ -569,6 +569,8 @@ printers:
 - `job_store.feishu.table_id`：多维表 ID（`tbl...`）
 - `job_store.feishu.request_timeout`：请求超时（默认 `3s`）
 
+任务表需要包含 `job_id`、`printer_id`、`file_name`、`status`、`copies`、`page_count`、`duplex`、`duplex_hook`、`duplex_expire_at`、`user`、`submitted_at` 等字段；`duplex_expire_at` 为日期时间字段，格式与 `submitted_at` 一致，用于判断手动双面翻面等待是否仍有效。
+
 ### Office Conversion
 
 - `office_conversion.enabled`：是否启用 Office 转 PDF（默认 `false`）
