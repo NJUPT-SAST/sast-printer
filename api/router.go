@@ -14,17 +14,32 @@ func SetupRouter() *gin.Engine {
 	router := gin.Default()
 	router.Use(IPRateLimit())
 
+	// Setup session middleware
+	cfg, err := requireConfig()
+	if err == nil {
+		router.Use(SetupSessionMiddleware(cfg))
+	}
+
 	// 健康检查
 	router.GET("/health", HealthCheck)
-	authMiddleware := AuthRequired()
+
+	// Use session-based auth middleware
+	authMiddleware := SessionAuthRequired()
 
 	// 飞书免登流程接口（前端用 code 换 token）
-	feishuAuth := router.Group("/api/auth/config")
+	feishuAuth := router.Group("/api/auth")
 	{
-		feishuAuth.GET("", GetAuthConfig) // 返回认证配置（appID等）给前端
-		feishuAuth.GET("/authorize-url", BuildFeishuAuthorizeURL)
-		feishuAuth.POST("/code-login", ExchangeFeishuCode)
-		feishuAuth.GET("/jssdk-config", GetJSSDKConfig)
+		feishuAuth.GET("/config", GetAuthConfig) // 返回认证配置（appID等）给前端
+		feishuAuth.GET("/session", CheckSession) // 验证 session 有效性
+	}
+
+	// Auth config subgroup (legacy path support)
+	feishuAuthConfig := router.Group("/api/auth/config")
+	{
+		feishuAuthConfig.GET("", GetAuthConfig)
+		feishuAuthConfig.GET("/authorize-url", BuildFeishuAuthorizeURL)
+		feishuAuthConfig.POST("/code-login", ExchangeFeishuCode)
+		feishuAuthConfig.GET("/jssdk-config", GetJSSDKConfig)
 	}
 
 	// CUPS相关接口

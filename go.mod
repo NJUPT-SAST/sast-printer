@@ -3,6 +3,7 @@ module goprint
 go 1.25.0
 
 require (
+	github.com/gin-contrib/sessions v1.0.1
 	github.com/gin-gonic/gin v1.9.1
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/larksuite/oapi-sdk-go/v3 v3.5.3

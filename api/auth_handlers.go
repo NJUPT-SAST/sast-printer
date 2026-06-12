@@ -162,35 +162,25 @@ func ExchangeFeishuCode(c *gin.Context) {
 		return
 	}
 
-	now := time.Now().UTC()
-	expiresAt := now.Add(time.Duration(tokenResp.Data.ExpiresIn) * time.Second)
-
-	result := gin.H{
-		"token_type":   tokenResp.Data.TokenType,
-		"access_token": accessToken,
-		"expires_in":   tokenResp.Data.ExpiresIn,
-		"expires_at":   expiresAt.Format(time.RFC3339),
-		"scope":        "",
-		"user":         user,
+	// Store user info and token in session
+	if err := SetSession(c, user, accessToken); err != nil {
+		log.Printf("[auth][code-login] session failed ip=%s err=%v", c.ClientIP(), err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session"})
+		return
 	}
 
-	if tokenResp.Data.RefreshToken != "" {
-		result["refresh_token"] = tokenResp.Data.RefreshToken
-		result["refresh_token_expires_in"] = tokenResp.Data.RefreshExpiresIn
-		if tokenResp.Data.RefreshExpiresIn > 0 {
-			result["refresh_token_expires_at"] = now.Add(time.Duration(tokenResp.Data.RefreshExpiresIn) * time.Second).Format(time.RFC3339)
-		}
-	}
-
-	if tokenResp.Data.TokenType == "" {
-		result["token_type"] = "Bearer"
-	}
-
-	result["issued_at"] = now.Format(time.RFC3339)
-	result["feishu_code"] = strconv.Itoa(tokenResp.Code)
 	log.Printf("[auth][code-login] done ip=%s open_id=%s cost=%s", c.ClientIP(), maskSensitive(user.OpenID), time.Since(start))
 
-	c.JSON(http.StatusOK, result)
+	// Return minimal response (session is stored in cookie)
+	c.JSON(http.StatusOK, gin.H{
+		"message": "login successful",
+		"user": gin.H{
+			"open_id":    user.OpenID,
+			"user_id":    user.UserID,
+			"name":       user.Name,
+			"avatar_url": user.Avatar,
+		},
+	})
 }
 
 // GetAuthConfig 返回认证配置给前端（如 appID 等）
