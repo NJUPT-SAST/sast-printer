@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"goprint/config"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -87,7 +88,7 @@ func newBitableJobStore(cfg *config.Config) (*bitableJobStore, error) {
 
 	timeout, err := time.ParseDuration(cfg.JobStore.Feishu.RequestTimeout)
 	if err != nil || timeout <= 0 {
-		timeout = 3 * time.Second
+		timeout = 10 * time.Second // 增加默认超时到 10 秒
 	}
 
 	return &bitableJobStore{
@@ -781,32 +782,62 @@ func (s *bitableJobStore) UpdateManualDuplexExpireAt(ctx context.Context, jobID 
 }
 
 func (s *bitableJobStore) updateJobFields(ctx context.Context, jobID string, fields map[string]interface{}) error {
-	recordID, err := s.findRecordIDByJobID(ctx, jobID)
-	if err != nil {
-		return err
-	}
+	maxRetries := 3
+	var lastErr error
 
-	req := larkbitable.NewUpdateAppTableRecordReqBuilder().
-		AppToken(s.appToken).
-		TableId(s.tableID).
-		RecordId(recordID).
-		AppTableRecord(larkbitable.NewAppTableRecordBuilder().
-			Fields(fields).
-			Build()).
-		Build()
-
-	updateResp, err := s.client.Bitable.AppTableRecord.Update(ctx, req)
-	if err != nil {
-		return fmt.Errorf("bitable update record failed: %w", err)
-	}
-	if updateResp == nil || !updateResp.Success() {
-		if updateResp == nil {
-			return fmt.Errorf("bitable update record failed: empty response")
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		recordID, err := s.findRecordIDByJobID(ctx, jobID)
+		if err != nil {
+			lastErr = err
+			if attempt < maxRetries {
+				log.Printf("[bitable] find record attempt %d/%d failed job_id=%s err=%v", attempt, maxRetries, jobID, err)
+				time.Sleep(time.Duration(attempt) * time.Second)
+				continue
+			}
+			return fmt.Errorf("failed to find record after %d attempts: %w", maxRetries, err)
 		}
-		return fmt.Errorf("bitable update record failed: code=%d msg=%s", updateResp.Code, updateResp.Msg)
+
+		req := larkbitable.NewUpdateAppTableRecordReqBuilder().
+			AppToken(s.appToken).
+			TableId(s.tableID).
+			RecordId(recordID).
+			AppTableRecord(larkbitable.NewAppTableRecordBuilder().
+				Fields(fields).
+				Build()).
+			Build()
+
+		updateResp, err := s.client.Bitable.AppTableRecord.Update(ctx, req)
+		if err != nil {
+			lastErr = err
+			if attempt < maxRetries {
+				log.Printf("[bitable] update attempt %d/%d failed job_id=%s err=%v", attempt, maxRetries, jobID, err)
+				time.Sleep(time.Duration(attempt) * time.Second)
+				continue
+			}
+			return fmt.Errorf("bitable update record failed after %d attempts: %w", maxRetries, err)
+		}
+		if updateResp == nil || !updateResp.Success() {
+			if updateResp == nil {
+				lastErr = fmt.Errorf("empty response")
+			} else {
+				lastErr = fmt.Errorf("code=%d msg=%s request_id=%s", updateResp.Code, updateResp.Msg, updateResp.RequestId())
+			}
+
+			if attempt < maxRetries {
+				log.Printf("[bitable] update attempt %d/%d rejected job_id=%s err=%v", attempt, maxRetries, jobID, lastErr)
+				time.Sleep(time.Duration(attempt) * time.Second)
+				continue
+			}
+			return fmt.Errorf("bitable update record rejected after %d attempts: %w", maxRetries, lastErr)
+		}
+
+		if attempt > 1 {
+			log.Printf("[bitable] update success after retry job_id=%s attempts=%d", jobID, attempt)
+		}
+		return nil
 	}
 
-	return nil
+	return fmt.Errorf("failed after %d attempts: %w", maxRetries, lastErr)
 }
 
 func (s *bitableJobStore) findRecordIDByJobID(ctx context.Context, jobID string) (string, error) {

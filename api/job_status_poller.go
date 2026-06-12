@@ -150,9 +150,6 @@ func (t *pendingJobTracker) checkPendingJobs() {
 	}
 	t.mu.RUnlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
 	for jobID, tracked := range jobsCopy {
 		// 获取任务状态
 		cupsJobID, err := strconv.Atoi(strings.TrimSpace(jobID))
@@ -197,10 +194,34 @@ func (t *pendingJobTracker) checkPendingJobs() {
 
 			log.Printf("[job-poller] job completed job_id=%s old_status=pending new_status=%s", jobID, job.Status)
 
-			if err := t.store.UpdateJobStatus(ctx, jobID, job.Status); err != nil {
-				log.Printf("[job-poller] failed to update job status job_id=%s err=%v", jobID, err)
-			} else {
-				log.Printf("[job-poller] updated job status in bitable job_id=%s status=%s", jobID, job.Status)
+			// 重试更新状态
+			updateSucceeded := false
+			for attempt := 1; attempt <= 3; attempt++ {
+				updateCtx, updateCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				err := t.store.UpdateJobStatus(updateCtx, jobID, job.Status)
+				updateCancel()
+
+				if err != nil {
+					log.Printf("[job-poller] update attempt %d/3 failed job_id=%s err=%v", attempt, jobID, err)
+					if attempt < 3 {
+						time.Sleep(time.Duration(attempt) * time.Second)
+						continue
+					}
+				} else {
+					if attempt > 1 {
+						log.Printf("[job-poller] updated job status after retry job_id=%s status=%s attempts=%d", jobID, job.Status, attempt)
+					} else {
+						log.Printf("[job-poller] updated job status in bitable job_id=%s status=%s", jobID, job.Status)
+					}
+					updateSucceeded = true
+					break
+				}
+			}
+
+			if !updateSucceeded {
+				log.Printf("[job-poller] failed to update job status after 3 attempts, keeping in tracker job_id=%s", jobID)
+				// 不从跟踪列表移除，下次继续尝试
+				continue
 			}
 
 			t.removePendingJob(jobID)

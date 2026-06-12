@@ -26,17 +26,16 @@ func SetupRouter() *gin.Engine {
 	// Use session-based auth middleware
 	authMiddleware := SessionAuthRequired()
 
-	// 飞书免登流程接口（前端用 code 换 token）
+	// 飞书免登流程接口
 	feishuAuth := router.Group("/api/auth")
 	{
-		feishuAuth.GET("/config", GetAuthConfig) // 返回认证配置（appID等）给前端
 		feishuAuth.GET("/session", CheckSession) // 验证 session 有效性
 	}
 
-	// Auth config subgroup (legacy path support)
+	// Auth config subgroup (完整的认证配置路径)
 	feishuAuthConfig := router.Group("/api/auth/config")
 	{
-		feishuAuthConfig.GET("", GetAuthConfig)
+		feishuAuthConfig.GET("", GetAuthConfig) // 返回认证配置（appID等）给前端
 		feishuAuthConfig.GET("/authorize-url", BuildFeishuAuthorizeURL)
 		feishuAuthConfig.POST("/code-login", ExchangeFeishuCode)
 		feishuAuthConfig.GET("/jssdk-config", GetJSSDKConfig)

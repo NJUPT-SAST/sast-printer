@@ -5,6 +5,7 @@
 *.so
 *.so.*
 *.dylib
+goprint
 
 # Test binary, built with `go test -c`
 *.test
@@ -51,3 +52,10 @@ office_converter/output/
 office_converter/converted/
 office_converter/__pycache__/
 office_converter/assets/
+
+# Documentation and notes (not for version control)
+docs/
+INSTALL-*.md
+*-troubleshooting.md
+*-fix-summary.md
+
