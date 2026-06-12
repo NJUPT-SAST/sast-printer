@@ -242,6 +242,7 @@ func disableCardButtons(ctx context.Context, cfg *config.Config, cardID string) 
 	}
 	var firstErr error
 	updated := false
+	sequence := 1 // 初始序号为 1
 	for _, button := range buttons {
 		partial, err := disabledButtonPatch(button.content)
 		if err != nil {
@@ -255,6 +256,7 @@ func disableCardButtons(ctx context.Context, cfg *config.Config, cardID string) 
 			ElementId(button.id).
 			Body(larkcardkit.NewPatchCardElementReqBodyBuilder().
 				PartialElement(partial).
+				Sequence(sequence). // 添加必填的 sequence 参数
 				Build()).
 			Build()
 		resp, err := client.Cardkit.V1.CardElement.Patch(ctx, req)
@@ -271,6 +273,7 @@ func disableCardButtons(ctx context.Context, cfg *config.Config, cardID string) 
 			continue
 		}
 		updated = true
+		sequence++ // 每次成功更新后递增 sequence
 	}
 	if !updated && firstErr != nil {
 		return firstErr
