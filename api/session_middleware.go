@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/gob"
 	"fmt"
 	"goprint/config"
 	"log"
@@ -17,6 +18,11 @@ const (
 	sessionKeyUser  = "user"
 	sessionKeyToken = "token"
 )
+
+func init() {
+	// Register types for gob encoding/decoding in cookie sessions
+	gob.Register(feishuUserInfo{})
+}
 
 // SetupSessionMiddleware configures session store and returns middleware
 func SetupSessionMiddleware(cfg *config.Config) gin.HandlerFunc {
