@@ -198,7 +198,7 @@ func prepareManualDuplexFiles(sourcePath string, printerCfg config.PrinterConfig
 	_ = secondPassFile.Close()
 
 	workingSource := sourcePath
-	padToEven := edgeConfig.PadToEven != nil && *edgeConfig.PadToEven
+	padToEven := printerCfg.PadToEven != nil && *printerCfg.PadToEven
 	if padToEven && totalPages%2 == 1 {
 		blankTail := filepath.Join(workDir, "blank-tail.pdf")
 		padded := filepath.Join(workDir, "padded-source.pdf")

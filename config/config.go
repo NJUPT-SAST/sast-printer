@@ -104,6 +104,7 @@ type PrinterConfig struct {
 	Reverse                    bool   `yaml:"reverse"`
 	DuplexMode                 string `yaml:"duplex_mode"`
 	FirstPass                  string `yaml:"first_pass"`
+	PadToEven                  *bool  `yaml:"pad_to_even"` // 通用设置，长边和短边共用
 	ManualDuplexPerPageTimeout string `yaml:"manual_duplex_per_page_timeout"`
 	Note                       string `yaml:"note"`
 
@@ -112,18 +113,16 @@ type PrinterConfig struct {
 	ShortEdge DuplexEdgeConfig `yaml:"short_edge"`
 
 	// 向后兼容：顶级字段（废弃，但保留支持）
-	PadToEven         *bool `yaml:"pad_to_even,omitempty"`
-	ReverseFirstPass  bool  `yaml:"reverse_first_pass,omitempty"`
-	ReverseSecondPass bool  `yaml:"reverse_second_pass,omitempty"`
-	RotateSecondPass  bool  `yaml:"rotate_second_pass,omitempty"`
+	ReverseFirstPass  bool `yaml:"reverse_first_pass,omitempty"`
+	ReverseSecondPass bool `yaml:"reverse_second_pass,omitempty"`
+	RotateSecondPass  bool `yaml:"rotate_second_pass,omitempty"`
 }
 
 // DuplexEdgeConfig 双面打印边缘配置（长边或短边）
 type DuplexEdgeConfig struct {
-	PadToEven         *bool `yaml:"pad_to_even"`
-	ReverseFirstPass  bool  `yaml:"reverse_first_pass"`
-	ReverseSecondPass bool  `yaml:"reverse_second_pass"`
-	RotateSecondPass  bool  `yaml:"rotate_second_pass"`
+	ReverseFirstPass  bool `yaml:"reverse_first_pass"`
+	ReverseSecondPass bool `yaml:"reverse_second_pass"`
+	RotateSecondPass  bool `yaml:"rotate_second_pass"`
 }
 
 // BotConfig 飞书 Bot 配置
@@ -590,14 +589,17 @@ func hardcodedDefault() FileTypeDefault {
 
 // applyPrinterDuplexDefaults 应用打印机双面打印的默认配置，支持向后兼容
 func applyPrinterDuplexDefaults(p *PrinterConfig) {
+	// PadToEven 是通用设置，设置默认值
+	if p.PadToEven == nil {
+		defaultTrue := true
+		p.PadToEven = &defaultTrue
+	}
+
 	// 如果使用了旧的顶级字段，复制到 long_edge 和 short_edge
-	hasLegacyConfig := p.PadToEven != nil || p.ReverseFirstPass || p.ReverseSecondPass || p.RotateSecondPass
+	hasLegacyConfig := p.ReverseFirstPass || p.ReverseSecondPass || p.RotateSecondPass
 
 	if hasLegacyConfig {
 		// 应用到 long_edge（如果未配置）
-		if p.LongEdge.PadToEven == nil {
-			p.LongEdge.PadToEven = p.PadToEven
-		}
 		if !p.LongEdge.ReverseFirstPass {
 			p.LongEdge.ReverseFirstPass = p.ReverseFirstPass
 		}
@@ -609,9 +611,6 @@ func applyPrinterDuplexDefaults(p *PrinterConfig) {
 		}
 
 		// 应用到 short_edge（如果未配置）
-		if p.ShortEdge.PadToEven == nil {
-			p.ShortEdge.PadToEven = p.PadToEven
-		}
 		if !p.ShortEdge.ReverseFirstPass {
 			p.ShortEdge.ReverseFirstPass = p.ReverseFirstPass
 		}
@@ -621,15 +620,5 @@ func applyPrinterDuplexDefaults(p *PrinterConfig) {
 		if !p.ShortEdge.RotateSecondPass {
 			p.ShortEdge.RotateSecondPass = p.RotateSecondPass
 		}
-	}
-
-	// 默认值：如果两个都未配置，使用合理默认
-	if p.LongEdge.PadToEven == nil {
-		defaultTrue := true
-		p.LongEdge.PadToEven = &defaultTrue
-	}
-	if p.ShortEdge.PadToEven == nil {
-		defaultTrue := true
-		p.ShortEdge.PadToEven = &defaultTrue
 	}
 }
