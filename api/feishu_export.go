@@ -657,7 +657,12 @@ func SubmitFeishuPrintJob(c *gin.Context) {
 	}
 
 	if duplexMode == "manual" {
-		firstPassPath, secondPassPath, cleanup, err := prepareManualDuplexFiles(printSourcePath, printerCfg)
+		// 检测文档方向以确定使用长边还是短边
+		duplexEdge := "long-edge"
+		if detectedSides, err := chooseAutoDuplexSides(printSourcePath); err == nil {
+			duplexEdge = extractDuplexEdge(detectedSides)
+		}
+		firstPassPath, secondPassPath, cleanup, err := prepareManualDuplexFiles(printSourcePath, printerCfg, duplexEdge)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error":   "failed to prepare manual duplex files",

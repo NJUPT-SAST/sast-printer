@@ -22,6 +22,18 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// extractDuplexEdge 从 duplex 参数提取 edge 类型
+func extractDuplexEdge(duplex string) string {
+	switch duplex {
+	case "long-edge", "two-sided-long-edge":
+		return "long-edge"
+	case "short-edge", "two-sided-short-edge":
+		return "short-edge"
+	default:
+		return "long-edge" // 默认长边
+	}
+}
+
 func currentAuthUser(c *gin.Context) (feishuUserInfo, bool) {
 	v, ok := c.Get("auth_user")
 	if !ok {
@@ -497,15 +509,20 @@ func SubmitPrintJob(c *gin.Context) {
 	}
 
 	duplexRequested := false
+	duplex := "long-edge" // 默认长边翻转
 	if rawDuplex := strings.TrimSpace(strings.ToLower(c.Query("duplex"))); rawDuplex != "" {
 		switch rawDuplex {
 		case "1", "true", "yes", "on":
 			duplexRequested = true
+			duplex = "long-edge"
 		case "0", "false", "no", "off":
 			duplexRequested = false
+		case "long-edge", "short-edge":
+			duplexRequested = true
+			duplex = rawDuplex
 		default:
 			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "duplex must be one of: true/false/1/0/yes/no/on/off",
+				"error": "duplex must be one of: true/false/1/0/yes/no/on/off/long-edge/short-edge",
 			})
 			return
 		}
@@ -707,7 +724,8 @@ func SubmitPrintJob(c *gin.Context) {
 	}
 
 	if duplexMode == "manual" {
-		firstPassPath, secondPassPath, cleanup, err := prepareManualDuplexFiles(printSourcePath, printerCfg)
+		duplexEdge := extractDuplexEdge(duplex)
+		firstPassPath, secondPassPath, cleanup, err := prepareManualDuplexFiles(printSourcePath, printerCfg, duplexEdge)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error":   "failed to prepare manual duplex files",

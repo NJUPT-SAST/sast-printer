@@ -768,7 +768,8 @@ func handleBotPrint(cfg *config.Config, values map[string]interface{}, openID st
 	}
 
 	if duplexMode == "manual" {
-		firstPassPath, secondPassPath, cleanupDup, err := prepareManualDuplexFiles(finalPath, printerCfg)
+		duplexEdge := extractDuplexEdge(duplex)
+		firstPassPath, secondPassPath, cleanupDup, err := prepareManualDuplexFiles(finalPath, printerCfg, duplexEdge)
 		if err != nil {
 			log.Printf("[bot] manual duplex prepare: %v", err)
 			_ = sendSessionText(context.Background(), cfg, session, "手动双面准备失败")

@@ -162,7 +162,18 @@ func manualDuplexPendingByToken(token string) (manualDuplexPending, bool) {
 	return getManualDuplexPending(token)
 }
 
-func prepareManualDuplexFiles(sourcePath string, printerCfg config.PrinterConfig) (string, string, func(), error) {
+func prepareManualDuplexFiles(sourcePath string, printerCfg config.PrinterConfig, duplexEdge string) (string, string, func(), error) {
+	// 根据 edge 类型选择配置
+	var edgeConfig config.DuplexEdgeConfig
+	switch duplexEdge {
+	case "long-edge":
+		edgeConfig = printerCfg.LongEdge
+	case "short-edge":
+		edgeConfig = printerCfg.ShortEdge
+	default:
+		return "", "", nil, fmt.Errorf("invalid duplex edge: %s", duplexEdge)
+	}
+
 	totalPages, err := pdfapi.PageCountFile(sourcePath)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("failed to read pdf page count: %w", err)
@@ -187,7 +198,8 @@ func prepareManualDuplexFiles(sourcePath string, printerCfg config.PrinterConfig
 	_ = secondPassFile.Close()
 
 	workingSource := sourcePath
-	if printerCfg.PadToEvenEnabled() && totalPages%2 == 1 {
+	padToEven := edgeConfig.PadToEven != nil && *edgeConfig.PadToEven
+	if padToEven && totalPages%2 == 1 {
 		blankTail := filepath.Join(workDir, "blank-tail.pdf")
 		padded := filepath.Join(workDir, "padded-source.pdf")
 		if err := createBlankPDF(blankTail, 1); err != nil {
@@ -208,10 +220,10 @@ func prepareManualDuplexFiles(sourcePath string, printerCfg config.PrinterConfig
 	firstSelectors := pageSelectors(totalPages, !firstPassOdd)
 	secondSelectors := pageSelectors(totalPages, firstPassOdd)
 
-	if printerCfg.ReverseFirstPass {
+	if edgeConfig.ReverseFirstPass {
 		reverseStrings(firstSelectors)
 	}
-	if printerCfg.ReverseSecondPass {
+	if edgeConfig.ReverseSecondPass {
 		reverseStrings(secondSelectors)
 	}
 
@@ -233,7 +245,7 @@ func prepareManualDuplexFiles(sourcePath string, printerCfg config.PrinterConfig
 		return "", "", nil, fmt.Errorf("failed to build second pass pdf: %w", err)
 	}
 
-	if printerCfg.RotateSecondPass {
+	if edgeConfig.RotateSecondPass {
 		rotated := filepath.Join(workDir, "second-pass-rotated.pdf")
 		if err := pdfapi.RotateFile(secondPassPath, rotated, 180, nil, nil); err != nil {
 			_ = os.Remove(secondPassPath)
@@ -578,8 +590,8 @@ func ApplyUncollatedCopies(sourcePath string, copies int) (string, error) {
 	return outPath, nil
 }
 
-func BuildManualDuplexPreview(sourcePath string, printerCfg config.PrinterConfig, copies int, collate bool) (string, string, func(), error) {
-	firstPassPath, secondPassPath, baseCleanup, err := prepareManualDuplexFiles(sourcePath, printerCfg)
+func BuildManualDuplexPreview(sourcePath string, printerCfg config.PrinterConfig, duplexEdge string, copies int, collate bool) (string, string, func(), error) {
+	firstPassPath, secondPassPath, baseCleanup, err := prepareManualDuplexFiles(sourcePath, printerCfg, duplexEdge)
 	if err != nil {
 		return "", "", nil, err
 	}
